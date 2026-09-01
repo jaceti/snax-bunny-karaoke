@@ -1,0 +1,82 @@
+import { env } from "cloudflare:workers";
+
+type QueueRow = { id:number; singer_name:string; song_title:string; video_title:string; video_id:string; thumbnail_url:string; sort_order:number; status:"pending"|"playing"|"done"; started_at:string|null };
+
+function codeOf(value:string) { return value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 6); }
+function dbBinding() { const db=(env as unknown as {DB?:D1Database}).DB; if(!db) throw new Error("The room database isn’t connected yet."); return db; }
+function queueItem(row:QueueRow) { return { id:row.id, singerName:row.singer_name, songTitle:row.song_title, videoTitle:row.video_title, videoId:row.video_id, thumbnailUrl:row.thumbnail_url, sortOrder:row.sort_order, status:row.status, startedAt:row.started_at }; }
+async function hash(value:string) { const digest=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(value)); return Array.from(new Uint8Array(digest),(byte)=>byte.toString(16).padStart(2,"0")).join(""); }
+
+async function verify(code:string, request:Request, kind:"host"|"invite"|"tv") {
+  const header = kind === "host" ? "x-host-token" : kind === "invite" ? "x-room-invite" : "x-tv-token";
+  const column = kind === "host" ? "host_token_hash" : kind === "invite" ? "invite_token_hash" : "tv_token_hash";
+  const token=request.headers.get(header)||""; if(!token) return false;
+  const room=await dbBinding().prepare(`SELECT ${column} AS token_hash FROM rooms WHERE code = ?`).bind(code).first<{token_hash:string}>();
+  return !!room && room.token_hash === await hash(token);
+}
+
+async function state(code:string) {
+  const db=dbBinding();
+  const room=await db.prepare("SELECT code, playback_status FROM rooms WHERE code = ?").bind(code).first<{code:string;playback_status:"idle"|"playing"|"paused"}>();
+  if(!room) return null;
+  const [now,waiting,completed]=await Promise.all([
+    db.prepare("SELECT id,singer_name,song_title,video_title,video_id,thumbnail_url,sort_order,status,started_at FROM queue_items WHERE room_code=? AND status='playing' ORDER BY sort_order LIMIT 1").bind(code).first<QueueRow>(),
+    db.prepare("SELECT id,singer_name,song_title,video_title,video_id,thumbnail_url,sort_order,status,started_at FROM queue_items WHERE room_code=? AND status='pending' ORDER BY sort_order LIMIT 100").bind(code).all<QueueRow>(),
+    db.prepare("SELECT COUNT(*) AS count FROM queue_items WHERE room_code=? AND status='done'").bind(code).first<{count:number}>(),
+  ]);
+  return { code, playbackStatus:room.playback_status, nowPlaying:now?queueItem(now):null, queue:waiting.results.map(queueItem), completedCount:Number(completed?.count||0) };
+}
+
+export async function GET(request:Request, context:{params:Promise<{code:string}>}) {
+  try { const code=codeOf((await context.params).code); const allowed=await verify(code,request,"host")||await verify(code,request,"invite")||await verify(code,request,"tv"); if(!allowed) return Response.json({error:"Use this room’s private link to enter."},{status:403}); const room=await state(code); if(!room) return Response.json({error:"That room has left the building."},{status:404}); return Response.json(room,{headers:{"cache-control":"no-store"}}); }
+  catch(error){ const message=error instanceof Error?error.message:"Couldn’t load the room."; return Response.json({error:message.includes("no such table")?"The room database is still setting up.":message},{status:500}); }
+}
+
+export async function POST(request:Request, context:{params:Promise<{code:string}>}) {
+  try {
+    const code=codeOf((await context.params).code); if(!await verify(code,request,"invite")) return Response.json({error:"Scan this room’s QR code to add a song."},{status:403});
+    const body=await request.json() as {singerName?:string;songTitle?:string;videoTitle?:string;videoId?:string;thumbnailUrl?:string};
+    const singerName=body.singerName?.trim().slice(0,32)||""; const songTitle=body.songTitle?.trim().slice(0,140)||""; const videoTitle=body.videoTitle?.trim().slice(0,240)||""; const videoId=body.videoId?.trim().slice(0,20)||""; const thumbnailUrl=body.thumbnailUrl?.trim().slice(0,600)||"";
+    if(!singerName||!songTitle||!videoTitle||!/^[A-Za-z0-9_-]{6,20}$/.test(videoId)) return Response.json({error:"That song selection is missing a detail."},{status:400});
+    const db=dbBinding(); const room=await state(code); if(!room) return Response.json({error:"That room has left the building."},{status:404});
+    const order=await db.prepare("SELECT COALESCE(MAX(sort_order),0)+1 AS next_order FROM queue_items WHERE room_code=?").bind(code).first<{next_order:number}>();
+    await db.prepare("INSERT INTO queue_items (room_code,singer_name,song_title,video_title,video_id,thumbnail_url,sort_order,status) VALUES (?,?,?,?,?,?,?,'pending')").bind(code,singerName,songTitle,videoTitle,videoId,thumbnailUrl,Number(order?.next_order||1)).run();
+    return Response.json(await state(code),{status:201});
+  } catch(error){ return Response.json({error:error instanceof Error?error.message:"Couldn’t add that song."},{status:500}); }
+}
+
+export async function PATCH(request:Request, context:{params:Promise<{code:string}>}) {
+  try {
+    const code=codeOf((await context.params).code); const isHost=await verify(code,request,"host"); const isTv=isHost?false:await verify(code,request,"tv"); const isGuest=isHost||isTv?false:await verify(code,request,"invite");
+    if(!isHost&&!isTv&&!isGuest) return Response.json({error:"This control needs a private room link."},{status:403});
+    const {action,itemId}=await request.json() as {action?:"play"|"pause"|"skip"|"complete"|"move_up"|"move_down"|"delete";itemId?:number};
+    if(!action) return Response.json({error:"Unknown room control."},{status:400});
+    if(["play","pause","skip"].includes(action)&&!isHost) return Response.json({error:"Only the host can control playback."},{status:403});
+    if(action==="complete"&&!isTv&&!isHost) return Response.json({error:"Only the TV player can finish a song."},{status:403});
+    const db=dbBinding();
+    if(["delete","move_up","move_down"].includes(action)) {
+      if(!itemId) return Response.json({error:"Choose a queued song first."},{status:400});
+      const item=await db.prepare("SELECT id,sort_order FROM queue_items WHERE id=? AND room_code=? AND status='pending'").bind(itemId,code).first<{id:number;sort_order:number}>();
+      if(!item) return Response.json({error:"That song is no longer waiting."},{status:409});
+      if(action==="delete") await db.prepare("DELETE FROM queue_items WHERE id=? AND room_code=?").bind(itemId,code).run();
+      else {
+        const before=action==="move_up"; const neighbor=await db.prepare(`SELECT id,sort_order FROM queue_items WHERE room_code=? AND status='pending' AND sort_order ${before?"<":">"} ? ORDER BY sort_order ${before?"DESC":"ASC"} LIMIT 1`).bind(code,item.sort_order).first<{id:number;sort_order:number}>();
+        if(neighbor) await db.batch([db.prepare("UPDATE queue_items SET sort_order=-1 WHERE id=?").bind(item.id),db.prepare("UPDATE queue_items SET sort_order=? WHERE id=?").bind(item.sort_order,neighbor.id),db.prepare("UPDATE queue_items SET sort_order=? WHERE id=?").bind(neighbor.sort_order,item.id)]);
+      }
+      return Response.json(await state(code));
+    }
+    const current=await db.prepare("SELECT id FROM queue_items WHERE room_code=? AND status='playing' ORDER BY sort_order LIMIT 1").bind(code).first<{id:number}>();
+    if((action==="complete"||action==="skip")&&current){ if(itemId&&itemId!==current.id) return Response.json(await state(code)); await db.prepare("UPDATE queue_items SET status='done',finished_at=CURRENT_TIMESTAMP WHERE id=?").bind(current.id).run(); }
+    if(action==="pause") await db.prepare("UPDATE rooms SET playback_status='paused' WHERE code=?").bind(code).run();
+    if(action==="play") {
+      if(!current){ const next=await db.prepare("SELECT id FROM queue_items WHERE room_code=? AND status='pending' ORDER BY sort_order LIMIT 1").bind(code).first<{id:number}>(); if(next) await db.prepare("UPDATE queue_items SET status='playing',started_at=CURRENT_TIMESTAMP WHERE id=?").bind(next.id).run(); }
+      await db.prepare("UPDATE rooms SET playback_status='playing' WHERE code=?").bind(code).run();
+    }
+    if(action==="complete"||action==="skip") {
+      const next=await db.prepare("SELECT id FROM queue_items WHERE room_code=? AND status='pending' ORDER BY sort_order LIMIT 1").bind(code).first<{id:number}>();
+      if(next){ await db.prepare("UPDATE queue_items SET status='playing',started_at=CURRENT_TIMESTAMP WHERE id=?").bind(next.id).run(); await db.prepare("UPDATE rooms SET playback_status='playing' WHERE code=?").bind(code).run(); }
+      else await db.prepare("UPDATE rooms SET playback_status='idle' WHERE code=?").bind(code).run();
+    }
+    return Response.json(await state(code));
+  } catch(error){ return Response.json({error:error instanceof Error?error.message:"The controls missed their cue."},{status:500}); }
+}
