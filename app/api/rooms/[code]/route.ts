@@ -102,11 +102,12 @@ export async function PATCH(request:Request, context:{params:Promise<{code:strin
 
     if(action==="balance") {
       // Fair rotation: nobody sings twice until everyone waiting has had a turn, and
-      // people who have sung less tonight go first. Ties keep request order.
+      // people who have sung less tonight go first. Ties go to whoever asked first —
+      // ids are assigned in request order, so they are the "when did you ask" clock.
       const db3=dbBinding();
-      const pending=await db3.prepare("SELECT q.id,q.singer_name,q.sort_order,COALESCE(s.sung_count,0) AS sung_count FROM queue_items q LEFT JOIN singer_stats s ON s.room_code=q.room_code AND s.singer_key=lower(trim(q.singer_name)) WHERE q.room_code=? AND q.status='pending' ORDER BY q.sort_order").bind(code).all<{id:number;singer_name:string;sort_order:number;sung_count:number}>();
+      const pending=await db3.prepare("SELECT q.id,q.singer_name,COALESCE(s.sung_count,0) AS sung_count FROM queue_items q LEFT JOIN singer_stats s ON s.room_code=q.room_code AND s.singer_key=lower(trim(q.singer_name)) WHERE q.room_code=? AND q.status='pending' ORDER BY q.id").bind(code).all<{id:number;singer_name:string;sung_count:number}>();
       const bySinger=new Map<string,{sung:number;first:number;items:number[]}>();
-      for(const row of pending.results){ const key=row.singer_name.trim().toLowerCase(); const entry=bySinger.get(key)||{sung:row.sung_count,first:row.sort_order,items:[]}; entry.items.push(row.id); bySinger.set(key,entry); }
+      for(const row of pending.results){ const key=row.singer_name.trim().toLowerCase(); const entry=bySinger.get(key)||{sung:row.sung_count,first:row.id,items:[]}; entry.items.push(row.id); bySinger.set(key,entry); }
       const ordered:number[]=[]; let round=0;
       while(true){ const turn=[...bySinger.values()].filter(e=>e.items.length>round).sort((a,b)=>(a.sung+round)-(b.sung+round)||a.first-b.first); if(!turn.length) break; for(const e of turn) ordered.push(e.items[round]); round+=1; }
       if(ordered.length) await db3.batch(ordered.map((id,index)=>db3.prepare("UPDATE queue_items SET sort_order=? WHERE id=? AND room_code=?").bind(index+1,id,code)));
