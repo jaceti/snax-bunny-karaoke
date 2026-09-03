@@ -104,7 +104,9 @@ export default function Home(){
   // the network is unhappy rather than hammering it.
   useEffect(()=>{
     if(!roomCode||!["host","singer","tv"].includes(screen))return;
-    const base=screen==="tv"?1000:2500;
+    // TV refreshes every second (it drives playback), the host every 2.5s, and guest
+    // phones every 4s — that's the polling budget for a 50-phone room on Cloudflare.
+    const base=screen==="tv"?1000:screen==="host"?2500:4000;
     let timer=0; let failures=0; let stopped=false;
 
     const tick=async()=>{
