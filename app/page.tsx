@@ -37,7 +37,12 @@ export default function Home(){
   // Local paging through one search's results — never triggers another YouTube call.
   const PAGE_SIZE=12; const [shown,setShown]=useState(PAGE_SIZE);
   const [consent,setConsent]=useState(false);
-  const [endsAtInput,setEndsAtInput]=useState("");
+  const [endsAtInput,setEndsAtInput]=useState(""); const endsAtFocused=useRef(false);
+  // Keep the last-call box in sync with the room (shown in the host's local time).
+  useEffect(()=>{ if(endsAtFocused.current) return; if(!room?.endsAt){ setEndsAtInput(""); return; } const d=new Date(room.endsAt); if(Number.isNaN(d.getTime())) return; setEndsAtInput(`${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`); },[room?.endsAt]);
+  // "11:45 PM" typed on the host's phone means tonight — or early tomorrow for a
+  // past-midnight last call — and is sent to the server as an absolute UTC instant.
+  function lastCallFromTime(value:string){ const [h,m]=value.split(":").map(Number); if(Number.isNaN(h)||Number.isNaN(m)) return null; const now=new Date(); const target=new Date(now.getFullYear(),now.getMonth(),now.getDate(),h,m,0,0); if(target.getTime()<now.getTime()-6*60*60*1000) target.setDate(target.getDate()+1); return target.toISOString(); }
   const [offline,setOffline]=useState(false);
   const codeRef=useRef(""); const inviteRef=useRef(""); const tvRef=useRef(""); const screenRef=useRef<Screen>("landing");
   const playerRef=useRef<Player|null>(null); const playerMountRef=useRef<HTMLDivElement|null>(null);
@@ -225,14 +230,14 @@ export default function Home(){
     {screen==="host"&&<section className="host-stage"><header className="app-header"><button className="wordmark" onClick={home}>SNAX</button><div className="host-room">Host console · Room <strong>{roomCode}</strong></div></header><div className="host-grid"><section className="host-controls"><p className="eyebrow">Playback</p><h1>{room?.nowPlaying?room.nowPlaying.singerName:"Ready when you are"}</h1><p className="current-song">{room?.nowPlaying?.songTitle||"Start playback when the first song hits the lineup."}</p><div className="control-row"><button className="play-control" onClick={()=>void control(room?.playbackStatus==="playing"?"pause":"play")} disabled={busy||(!room?.nowPlaying&&!room?.queue.length)}>{room?.playbackStatus==="playing"?"Pause":"Play"} <span>{room?.playbackStatus==="playing"?"Ⅱ":"▶"}</span></button><button onClick={()=>void control("skip",room?.nowPlaying?.id)} disabled={busy||!room?.nowPlaying}>Skip <span>→</span></button></div>
       <div className="event-controls">
         <h2>Run the night</h2>
-        <label className="event-toggle"><input type="checkbox" checked={!!room?.requestsToggle} disabled={busy} onChange={event=>void setEvent({action:"set_requests",requestsOpen:event.target.checked})}/><span>{room?.requestsToggle?"Song requests are open":"Song requests are closed"}</span></label>
+        <label className="event-toggle"><input type="checkbox" checked={!!room?.requestsToggle} disabled={busy} onChange={event=>void setEvent({action:"set_requests",requestsOpen:event.target.checked})}/><span>{room?.requestsOpen?"Song requests are open":room?.requestsToggle?"Requests closed — past last call":"Song requests are closed"}</span></label>
         <div className="event-row">
           <label className="event-field">Last call
-            <input type="datetime-local" value={endsAtInput} disabled={busy} onChange={event=>setEndsAtInput(event.target.value)} onBlur={()=>void setEvent({action:"set_end_time",endsAt:endsAtInput||null})}/>
+            <input type="time" value={endsAtInput} disabled={busy} onFocus={()=>{endsAtFocused.current=true;}} onChange={event=>{const value=event.target.value;setEndsAtInput(value);if(value.length===5)void setEvent({action:"set_end_time",endsAt:lastCallFromTime(value)});}} onBlur={()=>{endsAtFocused.current=false;if(endsAtInput.length===5)void setEvent({action:"set_end_time",endsAt:lastCallFromTime(endsAtInput)});}}/>
           </label>
           <button type="button" className="event-clear" disabled={busy||!room?.endsAt} onClick={()=>{setEndsAtInput("");void setEvent({action:"set_end_time",endsAt:null});}}>Clear</button>
         </div>
-        <p className="event-note">{room?.endsAt?`Requests close automatically ${room.cutoffMinutes} minutes before last call — ${new Date(room.endsAt).toLocaleTimeString([], {hour:"numeric", minute:"2-digit"})}.`:`Set a last call and requests close on their own ${room?.cutoffMinutes??15} minutes before it.`}</p>
+        <p className="event-note">{room?.endsAt?`Last call ${new Date(room.endsAt).toLocaleTimeString([], {hour:"numeric", minute:"2-digit"})} — requests close on their own at ${new Date(new Date(room.endsAt).getTime()-(room.cutoffMinutes||15)*60000).toLocaleTimeString([], {hour:"numeric", minute:"2-digit"})}. Flip the toggle back on to reopen anytime.`:`Set tonight’s last call and requests close on their own ${room?.cutoffMinutes??15} minutes before it.`}</p>
         <div className="event-actions">
           <button type="button" disabled={busy||(room?.queue.length||0)<2} onClick={()=>void setEvent({action:"balance"})}>Balance the lineup</button>
         </div>
