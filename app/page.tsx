@@ -5,7 +5,7 @@ import { QRCodeSVG } from "qrcode.react";
 
 type Song={videoId:string;title:string;channel:string;thumbnail:string};
 type QueueItem={id:number;singerName:string;songTitle:string;videoTitle:string;videoId:string;thumbnailUrl:string;sortOrder:number;status:"pending"|"playing"|"done";startedAt:string|null};
-type RoomState={code:string;playbackStatus:"idle"|"playing"|"paused";requestsOpen:boolean;requestsToggle:boolean;endsAt:string|null;cutoffMinutes:number;nowPlaying:QueueItem|null;queue:QueueItem[];completedCount:number};
+type RoomState={code:string;playbackStatus:"idle"|"playing"|"paused";requestsOpen:boolean;requestsToggle:boolean;endsAt:string|null;cutoffMinutes:number;isCurrent?:boolean;nowPlaying:QueueItem|null;queue:QueueItem[];completedCount:number};
 type Screen="landing"|"name"|"singer"|"host"|"tv";
 type Player={playVideo:()=>void;pauseVideo:()=>void;destroy?:()=>void};
 const isReady=(player:Player|null):player is Player=>typeof player?.playVideo==="function"&&typeof player?.pauseVideo==="function";
@@ -76,7 +76,15 @@ export default function Home(){
       codeRef.current=code;tvRef.current=television;inviteRef.current=invite;setRoomCode(code);setTvToken(television);setInviteToken(invite);setScreen("tv");void fetchRoom(code,false,"tv");
     }else if(params.get("room")&&code&&invite.length>30){
       codeRef.current=code;inviteRef.current=invite;setRoomCode(code);setInviteToken(invite);setScreen("name");void fetchRoom(code,false,"name");
+    }else if(params.get("join")==="now"){
+      // Static singer QR (hub page / printed cards): look up tonight's room and walk in.
+      void joinCurrentRoom();
+    }else if(params.get("start")==="host"){
+      // Arriving from the jessaceti.com/snaxkaraoke hub, where consent was already given:
+      // skip the landing page and open a fresh room straight into the host console.
+      acceptConsent(true); void createRoom();
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   },[fetchRoom]);
 
   // Polling is what keeps every phone in the room looking at the same lineup, and
@@ -103,6 +111,14 @@ export default function Home(){
 
   const joinUrl=useMemo(()=>typeof window!=="undefined"&&roomCode&&inviteToken?`${window.location.origin}/?room=${roomCode}&invite=${encodeURIComponent(inviteToken)}`:"",[roomCode,inviteToken]);
   const tvUrl=useMemo(()=>typeof window!=="undefined"&&roomCode&&tvToken?`${window.location.origin}/?tv=${roomCode}&screen=${encodeURIComponent(tvToken)}&invite=${encodeURIComponent(inviteToken)}`:"",[roomCode,tvToken,inviteToken]);
+
+  async function joinCurrentRoom(){
+    setBusy(true);setNotice("");
+    try{const response=await fetch("/api/rooms/current",{cache:"no-store"});const data=await response.json() as {code?:string;inviteToken?:string;error?:string};
+      if(!response.ok||!data.code||!data.inviteToken)throw new Error(data.error||"Snax hasn’t opened tonight’s room yet. Hang tight.");
+      codeRef.current=data.code;inviteRef.current=data.inviteToken;setRoomCode(data.code);setInviteToken(data.inviteToken);history.replaceState({},"",`?room=${data.code}&invite=${encodeURIComponent(data.inviteToken)}`);setScreen("name");await fetchRoom(data.code,false,"name");
+    }catch(error){history.replaceState({},"","/");setScreen("landing");setNotice(messageOf(error));}finally{setBusy(false);}
+  }
 
   async function createRoom(){
     setBusy(true);setNotice("");
@@ -172,7 +188,9 @@ export default function Home(){
           <input type="datetime-local" value={endsAtInput} disabled={busy} onChange={event=>setEndsAtInput(event.target.value)} onBlur={()=>void setEvent({action:"set_end_time",endsAt:endsAtInput||null})}/>
         </label>
         <p className="event-note">{room?.endsAt?`Requests close automatically ${room.cutoffMinutes} minutes before last call — ${new Date(room.endsAt).toLocaleTimeString([], {hour:"numeric", minute:"2-digit"})}.`:`Set a last call and requests close on their own ${room?.cutoffMinutes??15} minutes before it.`}</p>
+        <p className="event-note">{room?.isCurrent?"✓ This is tonight’s room — the singer QR on jessaceti.com/snaxkaraoke and the printed cards all lead here.":"The printed singer QR codes point at a different room right now."}</p>
         <div className="event-actions">
+          {!room?.isCurrent&&<button type="button" disabled={busy} onClick={()=>void setEvent({action:"claim_current",inviteToken:inviteRef.current})}>Make this tonight’s room</button>}
           <button type="button" disabled={busy} onClick={()=>void setEvent({action:"set_end_time",endsAt:null})}>Clear last call</button>
           <button type="button" className="danger" disabled={busy} onClick={()=>{if(window.confirm("Clear tonight’s lineup and start fresh? The room code and printed QR codes keep working."))void setEvent({action:"reset_event"});}}>Start a fresh event</button>
         </div>
