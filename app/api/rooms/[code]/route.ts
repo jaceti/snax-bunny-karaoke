@@ -79,6 +79,9 @@ export async function PATCH(request:Request, context:{params:Promise<{code:strin
     }
 
     if(action==="set_requests") {
+      // Reopening after last call has already passed: the host's toggle wins, so clear
+      // the stale last-call time instead of leaving requests silently closed.
+      if(requestsOpen){ const row=await dbBinding().prepare("SELECT requests_open, ends_at FROM rooms WHERE code=?").bind(code).first<{requests_open:number;ends_at:string|null}>(); if(row&&row.ends_at&&!requestsAreOpen({requests_open:1,ends_at:row.ends_at})) await dbBinding().prepare("UPDATE rooms SET ends_at=NULL WHERE code=?").bind(code).run(); }
       await dbBinding().prepare("UPDATE rooms SET requests_open=? WHERE code=?").bind(requestsOpen?1:0,code).run();
       return Response.json(await state(code));
     }
