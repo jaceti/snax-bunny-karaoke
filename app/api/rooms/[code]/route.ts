@@ -30,12 +30,13 @@ async function state(code:string) {
   const db=dbBinding();
   const room=await db.prepare("SELECT code, playback_status, requests_open, ends_at FROM rooms WHERE code = ?").bind(code).first<{code:string;playback_status:"idle"|"playing"|"paused";requests_open:number;ends_at:string|null}>();
   if(!room) return null;
-  const [now,waiting,completed]=await Promise.all([
+  const [now,waiting,completed,current]=await Promise.all([
     db.prepare("SELECT id,singer_name,song_title,video_title,video_id,thumbnail_url,sort_order,status,started_at FROM queue_items WHERE room_code=? AND status='playing' ORDER BY sort_order LIMIT 1").bind(code).first<QueueRow>(),
     db.prepare("SELECT id,singer_name,song_title,video_title,video_id,thumbnail_url,sort_order,status,started_at FROM queue_items WHERE room_code=? AND status='pending' ORDER BY sort_order LIMIT 100").bind(code).all<QueueRow>(),
     db.prepare("SELECT COUNT(*) AS count FROM queue_items WHERE room_code=? AND status='done'").bind(code).first<{count:number}>(),
+    db.prepare("SELECT code FROM current_room WHERE id=1").first<{code:string}>().catch(()=>null),
   ]);
-  return { code, playbackStatus:room.playback_status, requestsOpen:requestsAreOpen(room), requestsToggle:!!room.requests_open, endsAt:room.ends_at, cutoffMinutes:CUTOFF_MINUTES, nowPlaying:now?queueItem(now):null, queue:waiting.results.map(queueItem), completedCount:Number(completed?.count||0) };
+  return { code, playbackStatus:room.playback_status, requestsOpen:requestsAreOpen(room), requestsToggle:!!room.requests_open, endsAt:room.ends_at, cutoffMinutes:CUTOFF_MINUTES, isCurrent:current?.code===code, nowPlaying:now?queueItem(now):null, queue:waiting.results.map(queueItem), completedCount:Number(completed?.count||0) };
 }
 
 export async function GET(request:Request, context:{params:Promise<{code:string}>}) {
@@ -61,9 +62,19 @@ export async function PATCH(request:Request, context:{params:Promise<{code:strin
   try {
     const code=codeOf((await context.params).code); const isHost=await verify(code,request,"host"); const isTv=isHost?false:await verify(code,request,"tv"); const isGuest=isHost||isTv?false:await verify(code,request,"invite");
     if(!isHost&&!isTv&&!isGuest) return Response.json({error:"This control needs a private room link."},{status:403});
-    const {action,itemId,requestsOpen,endsAt}=await request.json() as {action?:"play"|"pause"|"skip"|"complete"|"move_up"|"move_down"|"delete"|"set_requests"|"set_end_time"|"reset_event";itemId?:number;requestsOpen?:boolean;endsAt?:string|null};
+    const {action,itemId,requestsOpen,endsAt,inviteToken}=await request.json() as {action?:"play"|"pause"|"skip"|"complete"|"move_up"|"move_down"|"delete"|"set_requests"|"set_end_time"|"reset_event"|"claim_current";itemId?:number;requestsOpen?:boolean;endsAt?:string|null;inviteToken?:string};
     if(!action) return Response.json({error:"Unknown room control."},{status:400});
-    if(["play","pause","skip","set_requests","set_end_time","reset_event"].includes(action)&&!isHost) return Response.json({error:"Only the host can control the room."},{status:403});
+    if(["play","pause","skip","set_requests","set_end_time","reset_event","claim_current"].includes(action)&&!isHost) return Response.json({error:"Only the host can control the room."},{status:403});
+
+    if(action==="claim_current") {
+      // Make this room the one the printed singer QR codes join. The host proves it
+      // holds the real invite token before we publish it.
+      const db0=dbBinding();
+      const row=await db0.prepare("SELECT invite_token_hash FROM rooms WHERE code=?").bind(code).first<{invite_token_hash:string}>();
+      if(!row||!inviteToken||row.invite_token_hash!==await hash(inviteToken)) return Response.json({error:"That invite link doesn’t match this room."},{status:400});
+      await db0.prepare("INSERT INTO current_room (id, code, invite_token, updated_at) VALUES (1, ?, ?, CURRENT_TIMESTAMP) ON CONFLICT(id) DO UPDATE SET code = excluded.code, invite_token = excluded.invite_token, updated_at = CURRENT_TIMESTAMP").bind(code,inviteToken).run();
+      return Response.json(await state(code));
+    }
 
     if(action==="set_requests") {
       await dbBinding().prepare("UPDATE rooms SET requests_open=? WHERE code=?").bind(requestsOpen?1:0,code).run();
