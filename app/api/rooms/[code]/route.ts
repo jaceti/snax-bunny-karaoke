@@ -1,10 +1,10 @@
 import { env } from "cloudflare:workers";
 
-type QueueRow = { id:number; singer_name:string; song_title:string; video_title:string; video_id:string; thumbnail_url:string; sort_order:number; status:"pending"|"playing"|"done"; started_at:string|null };
+type QueueRow = { id:number; singer_name:string; song_title:string; video_title:string; video_id:string; thumbnail_url:string; sort_order:number; status:"pending"|"playing"|"done"; started_at:string|null; sung_count?:number };
 
 function codeOf(value:string) { return value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 6); }
 function dbBinding() { const db=(env as unknown as {DB?:D1Database}).DB; if(!db) throw new Error("The room database isn’t connected yet."); return db; }
-function queueItem(row:QueueRow) { return { id:row.id, singerName:row.singer_name, songTitle:row.song_title, videoTitle:row.video_title, videoId:row.video_id, thumbnailUrl:row.thumbnail_url, sortOrder:row.sort_order, status:row.status, startedAt:row.started_at }; }
+function queueItem(row:QueueRow) { return { id:row.id, singerName:row.singer_name, songTitle:row.song_title, videoTitle:row.video_title, videoId:row.video_id, thumbnailUrl:row.thumbnail_url, sortOrder:row.sort_order, status:row.status, startedAt:row.started_at, sungCount:Number(row.sung_count||0) }; }
 async function hash(value:string) { const digest=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(value)); return Array.from(new Uint8Array(digest),(byte)=>byte.toString(16).padStart(2,"0")).join(""); }
 
 async function verify(code:string, request:Request, kind:"host"|"invite"|"tv") {
@@ -31,8 +31,8 @@ async function state(code:string) {
   const room=await db.prepare("SELECT code, playback_status, requests_open, ends_at, completed_count FROM rooms WHERE code = ?").bind(code).first<{code:string;playback_status:"idle"|"playing"|"paused";requests_open:number;ends_at:string|null;completed_count:number}>();
   if(!room) return null;
   const [now,waiting,current]=await Promise.all([
-    db.prepare("SELECT id,singer_name,song_title,video_title,video_id,thumbnail_url,sort_order,status,started_at FROM queue_items WHERE room_code=? AND status='playing' ORDER BY sort_order LIMIT 1").bind(code).first<QueueRow>(),
-    db.prepare("SELECT id,singer_name,song_title,video_title,video_id,thumbnail_url,sort_order,status,started_at FROM queue_items WHERE room_code=? AND status='pending' ORDER BY sort_order LIMIT 100").bind(code).all<QueueRow>(),
+    db.prepare("SELECT q.id,q.singer_name,q.song_title,q.video_title,q.video_id,q.thumbnail_url,q.sort_order,q.status,q.started_at,COALESCE(s.sung_count,0) AS sung_count FROM queue_items q LEFT JOIN singer_stats s ON s.room_code=q.room_code AND s.singer_key=lower(trim(q.singer_name)) WHERE q.room_code=? AND q.status='playing' ORDER BY q.sort_order LIMIT 1").bind(code).first<QueueRow>(),
+    db.prepare("SELECT q.id,q.singer_name,q.song_title,q.video_title,q.video_id,q.thumbnail_url,q.sort_order,q.status,q.started_at,COALESCE(s.sung_count,0) AS sung_count FROM queue_items q LEFT JOIN singer_stats s ON s.room_code=q.room_code AND s.singer_key=lower(trim(q.singer_name)) WHERE q.room_code=? AND q.status='pending' ORDER BY q.sort_order LIMIT 100").bind(code).all<QueueRow>(),
     db.prepare("SELECT code FROM current_room WHERE id=1").first<{code:string}>().catch(()=>null),
   ]);
   return { code, playbackStatus:room.playback_status, requestsOpen:requestsAreOpen(room), requestsToggle:!!room.requests_open, endsAt:room.ends_at, cutoffMinutes:CUTOFF_MINUTES, isCurrent:current?.code===code, nowPlaying:now?queueItem(now):null, queue:waiting.results.map(queueItem), completedCount:Number(room.completed_count||0) };
@@ -63,9 +63,9 @@ export async function PATCH(request:Request, context:{params:Promise<{code:strin
   try {
     const code=codeOf((await context.params).code); const isHost=await verify(code,request,"host"); const isTv=isHost?false:await verify(code,request,"tv"); const isGuest=isHost||isTv?false:await verify(code,request,"invite");
     if(!isHost&&!isTv&&!isGuest) return Response.json({error:"This control needs a private room link."},{status:403});
-    const {action,itemId,requestsOpen,endsAt,inviteToken,tvToken}=await request.json() as {action?:"play"|"pause"|"skip"|"complete"|"move_up"|"move_down"|"delete"|"set_requests"|"set_end_time"|"reset_event"|"claim_current";itemId?:number;requestsOpen?:boolean;endsAt?:string|null;inviteToken?:string;tvToken?:string};
+    const {action,itemId,requestsOpen,endsAt,inviteToken,tvToken}=await request.json() as {action?:"play"|"pause"|"skip"|"complete"|"move_up"|"move_down"|"delete"|"set_requests"|"set_end_time"|"reset_event"|"claim_current"|"balance";itemId?:number;requestsOpen?:boolean;endsAt?:string|null;inviteToken?:string;tvToken?:string};
     if(!action) return Response.json({error:"Unknown room control."},{status:400});
-    if(["play","pause","skip","set_requests","set_end_time","reset_event","claim_current"].includes(action)&&!isHost) return Response.json({error:"Only the host can control the room."},{status:403});
+    if(["play","pause","skip","set_requests","set_end_time","reset_event","claim_current","balance","move_up","move_down","delete"].includes(action)&&!isHost) return Response.json({error:"Only the host can control the room."},{status:403});
 
     if(action==="claim_current") {
       // Make this room the one the printed singer QR codes join. The host proves it
@@ -92,7 +92,21 @@ export async function PATCH(request:Request, context:{params:Promise<{code:strin
       await db2.batch([
         db2.prepare("DELETE FROM queue_items WHERE room_code=?").bind(code),
         db2.prepare("UPDATE rooms SET playback_status='idle', requests_open=1, ends_at=NULL, completed_count=0 WHERE code=?").bind(code),
+        db2.prepare("DELETE FROM singer_stats WHERE room_code=?").bind(code),
       ]);
+      return Response.json(await state(code));
+    }
+
+    if(action==="balance") {
+      // Fair rotation: nobody sings twice until everyone waiting has had a turn, and
+      // people who have sung less tonight go first. Ties keep request order.
+      const db3=dbBinding();
+      const pending=await db3.prepare("SELECT q.id,q.singer_name,q.sort_order,COALESCE(s.sung_count,0) AS sung_count FROM queue_items q LEFT JOIN singer_stats s ON s.room_code=q.room_code AND s.singer_key=lower(trim(q.singer_name)) WHERE q.room_code=? AND q.status='pending' ORDER BY q.sort_order").bind(code).all<{id:number;singer_name:string;sort_order:number;sung_count:number}>();
+      const bySinger=new Map<string,{sung:number;first:number;items:number[]}>();
+      for(const row of pending.results){ const key=row.singer_name.trim().toLowerCase(); const entry=bySinger.get(key)||{sung:row.sung_count,first:row.sort_order,items:[]}; entry.items.push(row.id); bySinger.set(key,entry); }
+      const ordered:number[]=[]; let round=0;
+      while(true){ const turn=[...bySinger.values()].filter(e=>e.items.length>round).sort((a,b)=>(a.sung+round)-(b.sung+round)||a.first-b.first); if(!turn.length) break; for(const e of turn) ordered.push(e.items[round]); round+=1; }
+      if(ordered.length) await db3.batch(ordered.map((id,index)=>db3.prepare("UPDATE queue_items SET sort_order=? WHERE id=? AND room_code=?").bind(index+1,id,code)));
       return Response.json(await state(code));
     }
 
@@ -112,7 +126,12 @@ export async function PATCH(request:Request, context:{params:Promise<{code:strin
     const current=await db.prepare("SELECT id FROM queue_items WHERE room_code=? AND status='playing' ORDER BY sort_order LIMIT 1").bind(code).first<{id:number}>();
     if((action==="complete"||action==="skip")&&current){ if(itemId&&itemId!==current.id) return Response.json(await state(code));
       // Privacy policy: a played or skipped selection is deleted immediately. Keep only a tally.
-      await db.batch([db.prepare("DELETE FROM queue_items WHERE id=?").bind(current.id), db.prepare("UPDATE rooms SET completed_count=completed_count+1 WHERE code=?").bind(code)]); }
+      const singer=await db.prepare("SELECT singer_name FROM queue_items WHERE id=?").bind(current.id).first<{singer_name:string}>();
+      await db.batch([
+        db.prepare("DELETE FROM queue_items WHERE id=?").bind(current.id),
+        db.prepare("UPDATE rooms SET completed_count=completed_count+1 WHERE code=?").bind(code),
+        db.prepare("INSERT INTO singer_stats (room_code, singer_key, sung_count, last_sung_at) VALUES (?, ?, 1, CURRENT_TIMESTAMP) ON CONFLICT(room_code, singer_key) DO UPDATE SET sung_count=sung_count+1, last_sung_at=CURRENT_TIMESTAMP").bind(code,(singer?.singer_name||"").trim().toLowerCase()),
+      ]); }
     if(action==="pause") await db.prepare("UPDATE rooms SET playback_status='paused' WHERE code=?").bind(code).run();
     if(action==="play") {
       if(!current){ const next=await db.prepare("SELECT id FROM queue_items WHERE room_code=? AND status='pending' ORDER BY sort_order LIMIT 1").bind(code).first<{id:number}>(); if(next) await db.prepare("UPDATE queue_items SET status='playing',started_at=CURRENT_TIMESTAMP WHERE id=?").bind(next.id).run(); }
