@@ -4,7 +4,7 @@ import { FormEvent, useCallback, useEffect, useLayoutEffect, useMemo, useRef, us
 import { QRCodeSVG } from "qrcode.react";
 
 type Song={videoId:string;title:string;channel:string;thumbnail:string};
-type QueueItem={id:number;singerName:string;songTitle:string;videoTitle:string;videoId:string;thumbnailUrl:string;sortOrder:number;status:"pending"|"playing"|"done";startedAt:string|null};
+type QueueItem={id:number;singerName:string;songTitle:string;videoTitle:string;videoId:string;thumbnailUrl:string;sortOrder:number;status:"pending"|"playing"|"done";startedAt:string|null;sungCount?:number};
 // Rabbit Box asked for a three-second "up next" card between songs.
 const INTERLUDE_MS=3000;
 type RoomState={code:string;playbackStatus:"idle"|"playing"|"paused";requestsOpen:boolean;requestsToggle:boolean;endsAt:string|null;cutoffMinutes:number;isCurrent?:boolean;nowPlaying:QueueItem|null;queue:QueueItem[];completedCount:number};
@@ -90,9 +90,10 @@ export default function Home(){
       // Static singer QR (hub page / printed cards): look up tonight's room and walk in.
       void joinCurrentRoom();
     }else if(params.get("start")==="host"){
-      // Arriving from the jessaceti.com/snaxkaraoke hub, where consent was already given:
-      // skip the landing page and open a fresh room straight into the host console.
-      acceptConsent(true); void createRoom();
+      // Arriving from the jessaceti.com/snaxkaraoke hub, where consent was already given.
+      // If this device already hosts tonight's room, walk back into it; otherwise open a
+      // fresh room (which becomes tonight's room, so the printed QR codes follow it).
+      acceptConsent(true); void resumeOrCreateRoom();
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   },[fetchRoom]);
@@ -137,6 +138,14 @@ export default function Home(){
       if(!data.tvToken)throw new Error("Tonight’s room was opened before TV links existed — start a fresh room from the host console.");
       codeRef.current=data.code;tvRef.current=data.tvToken;inviteRef.current=data.inviteToken;setRoomCode(data.code);setTvToken(data.tvToken);setInviteToken(data.inviteToken);history.replaceState({},"",`?tv=${data.code}&screen=${encodeURIComponent(data.tvToken)}&invite=${encodeURIComponent(data.inviteToken)}`);setScreen("tv");await fetchRoom(data.code,false,"tv");
     }catch(error){history.replaceState({},"","/");setScreen("landing");setNotice(messageOf(error));}finally{setBusy(false);}
+  }
+
+  async function resumeOrCreateRoom(){
+    try{const response=await fetch("/api/rooms/current",{cache:"no-store"});const data=await response.json() as {code?:string;inviteToken?:string;tvToken?:string|null};
+      const stored=data.code?localStorage.getItem(`snax-host-${data.code}`):null;
+      if(data.code&&stored){ codeRef.current=data.code; inviteRef.current=data.inviteToken||localStorage.getItem(`snax-invite-${data.code}`)||""; tvRef.current=data.tvToken||localStorage.getItem(`snax-tv-${data.code}`)||""; setRoomCode(data.code); setInviteToken(inviteRef.current); setTvToken(tvRef.current); history.replaceState({},"",`?host=${data.code}`); setScreen("host"); await fetchRoom(data.code,false,"host"); return; }
+    }catch{}
+    await createRoom();
   }
 
   async function createRoom(){
@@ -212,21 +221,22 @@ export default function Home(){
 
     {screen==="singer"&&<section className="singer-stage"><header className="app-header"><button className="wordmark" onClick={home}>SNAX</button><span>Room <strong>{roomCode}</strong></span><span className="singer-chip">{singerName}</span></header><div className="singer-grid"><div className="search-panel"><p className="eyebrow">You’re in, {singerName}</p><h1>Pick your song</h1>{room&&!room.requestsOpen&&<p className="requests-closed">Requests are closed for tonight. The bunny is tired.</p>}{(!room||room.requestsOpen)&&<><form className="song-search" onSubmit={search}><label htmlFor="song">Search a song or artist</label><div><input id="song" value={query} onChange={event=>setQuery(event.target.value)} placeholder="Robyn, Chappell Roan, ABBA…"/><button disabled={searching}>{searching?"Searching…":"Find karaoke"}</button></div><small>We automatically add “karaoke lyrics” to every YouTube search.</small></form><div className="results">{results.map(song=><article key={song.videoId}><img src={song.thumbnail} alt=""/><div><strong><a href={`https://www.youtube.com/watch?v=${song.videoId}`} target="_blank" rel="noreferrer" title="Open on YouTube">{song.title}</a></strong><small>{song.channel}</small><button onClick={()=>void addSong(song)} disabled={busy}>Add to lineup +</button></div></article>)}</div>{nextPage&&results.length>0&&<button type="button" className="load-more" disabled={searching} onClick={()=>void runSearch(lastQuery,nextPage)}>{searching?"Loading…":"More results ↓"}</button>}</>}</div><QueuePanel room={room} busy={busy} onControl={control}/></div></section>}
 
-    {screen==="host"&&<section className="host-stage"><header className="app-header"><button className="wordmark" onClick={home}>SNAX</button><div className="host-room">Host console · Room <strong>{roomCode}</strong></div><button className="open-tv" onClick={()=>window.open(tvUrl,"_blank","noopener,noreferrer")}>Open TV display ↗</button></header><div className="host-grid"><section className="host-controls"><p className="eyebrow">Playback</p><h1>{room?.nowPlaying?room.nowPlaying.singerName:"Ready when you are"}</h1><p className="current-song">{room?.nowPlaying?.songTitle||"Start playback when the first song hits the lineup."}</p><div className="control-row"><button className="play-control" onClick={()=>void control(room?.playbackStatus==="playing"?"pause":"play")} disabled={busy||(!room?.nowPlaying&&!room?.queue.length)}>{room?.playbackStatus==="playing"?"Pause":"Play"} <span>{room?.playbackStatus==="playing"?"Ⅱ":"▶"}</span></button><button onClick={()=>void control("skip",room?.nowPlaying?.id)} disabled={busy||!room?.nowPlaying}>Skip <span>→</span></button></div><div className="host-tip">Playback happens on the TV display. Keep this host console open on your phone or laptop.</div>
+    {screen==="host"&&<section className="host-stage"><header className="app-header"><button className="wordmark" onClick={home}>SNAX</button><div className="host-room">Host console · Room <strong>{roomCode}</strong></div></header><div className="host-grid"><section className="host-controls"><p className="eyebrow">Playback</p><h1>{room?.nowPlaying?room.nowPlaying.singerName:"Ready when you are"}</h1><p className="current-song">{room?.nowPlaying?.songTitle||"Start playback when the first song hits the lineup."}</p><div className="control-row"><button className="play-control" onClick={()=>void control(room?.playbackStatus==="playing"?"pause":"play")} disabled={busy||(!room?.nowPlaying&&!room?.queue.length)}>{room?.playbackStatus==="playing"?"Pause":"Play"} <span>{room?.playbackStatus==="playing"?"Ⅱ":"▶"}</span></button><button onClick={()=>void control("skip",room?.nowPlaying?.id)} disabled={busy||!room?.nowPlaying}>Skip <span>→</span></button></div>
       <div className="event-controls">
         <h2>Run the night</h2>
         <label className="event-toggle"><input type="checkbox" checked={!!room?.requestsToggle} disabled={busy} onChange={event=>void setEvent({action:"set_requests",requestsOpen:event.target.checked})}/><span>{room?.requestsToggle?"Song requests are open":"Song requests are closed"}</span></label>
-        <label className="event-field">Last call
-          <input type="datetime-local" value={endsAtInput} disabled={busy} onChange={event=>setEndsAtInput(event.target.value)} onBlur={()=>void setEvent({action:"set_end_time",endsAt:endsAtInput||null})}/>
-        </label>
-        <p className="event-note">{room?.endsAt?`Requests close automatically ${room.cutoffMinutes} minutes before last call — ${new Date(room.endsAt).toLocaleTimeString([], {hour:"numeric", minute:"2-digit"})}.`:`Set a last call and requests close on their own ${room?.cutoffMinutes??15} minutes before it.`}</p>
-        <p className="event-note">{room?.isCurrent?"✓ This is tonight’s room — the singer QR on jessaceti.com/snaxkaraoke and the printed cards all lead here.":"The printed singer QR codes point at a different room right now."}</p>
-        <div className="event-actions">
-          {!room?.isCurrent&&<button type="button" disabled={busy} onClick={()=>void setEvent({action:"claim_current",inviteToken:inviteRef.current,tvToken:tvRef.current})}>Make this tonight’s room</button>}
-          <button type="button" disabled={busy} onClick={()=>void setEvent({action:"set_end_time",endsAt:null})}>Clear last call</button>
-          <button type="button" className="danger" disabled={busy} onClick={()=>{if(window.confirm("Clear tonight’s lineup and start fresh? The room code and printed QR codes keep working."))void setEvent({action:"reset_event"});}}>Start a fresh event</button>
+        <div className="event-row">
+          <label className="event-field">Last call
+            <input type="datetime-local" value={endsAtInput} disabled={busy} onChange={event=>setEndsAtInput(event.target.value)} onBlur={()=>void setEvent({action:"set_end_time",endsAt:endsAtInput||null})}/>
+          </label>
+          <button type="button" className="event-clear" disabled={busy||!room?.endsAt} onClick={()=>{setEndsAtInput("");void setEvent({action:"set_end_time",endsAt:null});}}>Clear</button>
         </div>
-      </div></section><section className="host-join"><p className="eyebrow">Guest entry</p><h2>{roomCode}</h2>{joinUrl&&<QRCodeSVG value={joinUrl} size={174} level="M" marginSize={1} bgColor="#fffdf7" fgColor="#111111"/>}<p>Guests scan this code to choose a name and add songs. No account needed.</p></section><QueuePanel room={room} busy={busy} onControl={control} host/></div></section>}
+        <p className="event-note">{room?.endsAt?`Requests close automatically ${room.cutoffMinutes} minutes before last call — ${new Date(room.endsAt).toLocaleTimeString([], {hour:"numeric", minute:"2-digit"})}.`:`Set a last call and requests close on their own ${room?.cutoffMinutes??15} minutes before it.`}</p>
+        <div className="event-actions">
+          <button type="button" disabled={busy||(room?.queue.length||0)<2} onClick={()=>void setEvent({action:"balance"})}>Balance the lineup</button>
+        </div>
+        <p className="event-note">Balance puts first-timers ahead and spaces out repeat singers, so nobody sings twice before everyone waiting has had a turn.</p>
+      </div></section><QueuePanel room={room} busy={busy} onControl={control} host/></div></section>}
 
     {screen==="tv"&&<section className="tv-stage-full">
       <header className="tv-top"><div className="tv-brand"><img src="/snax-profile-hd.png" alt="Snax the Bunny"/><strong>SNAX</strong><span>Karaoke</span></div><div className="tv-now">{room?.nowPlaying?<><span>Now singing</span><FitText text={room.nowPlaying.singerName} max={34} min={18}/><a href={`https://www.youtube.com/watch?v=${room.nowPlaying.videoId}`} target="_blank" rel="noreferrer">{room.nowPlaying.videoTitle} ↗</a></>:<><span>Next up</span><FitText text={room?.queue[0]?.singerName||"The stage is open"} max={34} min={18}/><em>{room?.queue[0]?.songTitle||"Add a song from your phone"}</em></>}</div></header>
@@ -262,4 +272,4 @@ function FitText({text,max,min=18,className}:{text:string;max:number;min?:number
   return <strong ref={ref} className={className} style={{display:"block",whiteSpace:"nowrap",overflow:"hidden"}}>{text}</strong>;
 }
 
-function QueuePanel({room,busy,onControl,host=false}:{room:RoomState|null;busy:boolean;host?:boolean;onControl:(action:"move_up"|"move_down"|"delete",id:number)=>Promise<void>}){return <section className={`queue-panel ${host?"host-queue":""}`}><div className="queue-title"><div><p className="eyebrow">The lineup</p><h2>Who’s next?</h2></div><span>{room?.queue.length||0} waiting</span></div>{room?.nowPlaying&&<div className="now-card"><span>Now singing</span><strong>{room.nowPlaying.singerName}</strong><small>{room.nowPlaying.songTitle}</small></div>}<ol>{room?.queue.map((item,index)=><li key={item.id}><span className="queue-position">{index+1}</span><div className="queue-copy"><strong>{item.singerName}</strong><small>{item.songTitle}</small></div><div className="queue-actions"><button onClick={()=>void onControl("move_up",item.id)} disabled={busy||index===0} aria-label="Move song up">↑</button><button onClick={()=>void onControl("move_down",item.id)} disabled={busy||index===room.queue.length-1} aria-label="Move song down">↓</button><button onClick={()=>void onControl("delete",item.id)} disabled={busy} aria-label="Delete song">×</button></div></li>)}{!room?.queue.length&&<li className="empty-queue">No one’s waiting yet. The microphone is getting nervous.</li>}</ol></section>}
+function QueuePanel({room,busy,onControl,host=false}:{room:RoomState|null;busy:boolean;host?:boolean;onControl:(action:"move_up"|"move_down"|"delete",id:number)=>Promise<void>}){return <section className={`queue-panel ${host?"host-queue":""}`}><div className="queue-title"><div><p className="eyebrow">The lineup</p><h2>Who’s next?</h2></div><span>{room?.queue.length||0} waiting</span></div>{room?.nowPlaying&&<div className="now-card"><span>Now singing</span><strong>{room.nowPlaying.singerName}</strong><small>{room.nowPlaying.songTitle}</small></div>}<ol>{room?.queue.map((item,index)=><li key={item.id}><span className="queue-position">{index+1}</span><div className="queue-copy"><strong>{item.singerName}{host&&(item.sungCount||0)>0&&<em className="turns">{item.sungCount===1?"sang once":`sang ${item.sungCount}×`}</em>}</strong><small>{item.songTitle}</small></div>{host&&<div className="queue-actions"><button onClick={()=>void onControl("move_up",item.id)} disabled={busy||index===0} aria-label="Move song up">↑</button><button onClick={()=>void onControl("move_down",item.id)} disabled={busy||index===room.queue.length-1} aria-label="Move song down">↓</button><button onClick={()=>void onControl("delete",item.id)} disabled={busy} aria-label="Delete song">×</button></div>}</li>)}{!room?.queue.length&&<li className="empty-queue">No one’s waiting yet. The microphone is getting nervous.</li>}</ol></section>}
