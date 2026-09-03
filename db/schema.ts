@@ -11,6 +11,8 @@ export const rooms = sqliteTable("rooms", {
   requestsOpen: integer("requests_open", { mode: "boolean" }).notNull().default(true),
   // Optional last-call time. Requests close automatically CUTOFF_MINUTES before it.
   endsAt: text("ends_at"),
+  // Played/skipped selections are deleted immediately (privacy policy); we only keep a tally.
+  completedCount: integer("completed_count").notNull().default(0),
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
 
@@ -39,5 +41,7 @@ export const currentRoom = sqliteTable("current_room", {
   id: integer("id").primaryKey(),
   code: text("code").notNull(),
   inviteToken: text("invite_token").notNull(),
+  // Lets the hub page open the TV display for tonight's room with one tap.
+  tvToken: text("tv_token"),
   updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
