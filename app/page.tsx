@@ -48,11 +48,6 @@ export default function Home(){
   const playerRef=useRef<Player|null>(null); const playerMountRef=useRef<HTMLDivElement|null>(null);
 
   useEffect(()=>{ screenRef.current=screen; },[screen]);
-  useEffect(()=>{
-    if(!room?.endsAt){ setEndsAtInput(""); return; }
-    const when=new Date(room.endsAt); const pad=(n:number)=>String(n).padStart(2,"0");
-    setEndsAtInput(`${when.getFullYear()}-${pad(when.getMonth()+1)}-${pad(when.getDate())}T${pad(when.getHours())}:${pad(when.getMinutes())}`);
-  },[room?.endsAt]);
   useEffect(()=>{ setConsent(localStorage.getItem("snax-consent")==="1"); },[]);
   function acceptConsent(value:boolean){ setConsent(value); try{ localStorage.setItem("snax-consent",value?"1":"0"); }catch{} }
 
