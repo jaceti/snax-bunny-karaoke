@@ -26,17 +26,16 @@ export async function GET(request: Request) {
 
     const url = new URL(request.url);
     const q = url.searchParams.get("q")?.trim().slice(0, 100) || "";
-    // Optional YouTube page token so guests can page through more results.
-    const pageToken = (url.searchParams.get("page") || "").replace(/[^A-Za-z0-9_-]/g, "").slice(0, 64);
-    if (q.length < 2) return Response.json({ results: [], nextPage: null });
-    // Every search.list call costs the same quota whatever maxResults is, so ask for a full page.
-    const params = new URLSearchParams({ part: "snippet", type: "video", videoEmbeddable: "true", safeSearch: "moderate", maxResults: "24", q: `${q} karaoke lyrics`, key });
-    if (pageToken) params.set("pageToken", pageToken);
+    if (q.length < 2) return Response.json({ results: [] });
+    // One search = one YouTube API call. Every search.list call costs the same quota
+    // whatever maxResults is, so we take the maximum (50) and let the phone page
+    // through those locally — no further API calls until the guest types a new search.
+    const params = new URLSearchParams({ part: "snippet", type: "video", videoEmbeddable: "true", safeSearch: "moderate", maxResults: "50", q: `${q} karaoke lyrics`, key });
     const youtube = await fetch(`https://www.googleapis.com/youtube/v3/search?${params}`);
-    const data = await youtube.json() as { items?: YouTubeSearchItem[]; nextPageToken?: string; error?: { message?: string } };
+    const data = await youtube.json() as { items?: YouTubeSearchItem[]; error?: { message?: string } };
     if (!youtube.ok) throw new Error(data.error?.message || "YouTube search took a mic break.");
     const results = (data.items || []).flatMap((item) => item.id?.videoId && item.snippet ? [{ videoId: item.id.videoId, title: decode(item.snippet.title || "Karaoke track"), channel: decode(item.snippet.channelTitle || "YouTube"), thumbnail: item.snippet.thumbnails?.medium?.url || item.snippet.thumbnails?.default?.url || "" }] : []);
-    return Response.json({ results, nextPage: data.nextPageToken || null }, { headers: { "cache-control": "no-store" } });
+    return Response.json({ results }, { headers: { "cache-control": "no-store" } });
   } catch (error) {
     return Response.json({ error: error instanceof Error ? error.message : "Search took a mic break." }, { status: 500 });
   }
