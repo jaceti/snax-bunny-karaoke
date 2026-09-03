@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { index, integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import { index, integer, primaryKey, sqliteTable, text } from "drizzle-orm/sqlite-core";
 
 export const rooms = sqliteTable("rooms", {
   code: text("code").primaryKey(),
@@ -45,3 +45,12 @@ export const currentRoom = sqliteTable("current_room", {
   tvToken: text("tv_token"),
   updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
+
+// How many turns each singer has had tonight, so the host can keep the lineup fair.
+// Keyed by lower-cased name; cleared with the room's queue on a fresh event.
+export const singerStats = sqliteTable("singer_stats", {
+  roomCode: text("room_code").notNull(),
+  singerKey: text("singer_key").notNull(),
+  sungCount: integer("sung_count").notNull().default(0),
+  lastSungAt: text("last_sung_at"),
+}, (table) => [primaryKey({ columns: [table.roomCode, table.singerKey] })]);
