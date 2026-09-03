@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { QRCodeSVG } from "qrcode.react";
 
 type Song={videoId:string;title:string;channel:string;thumbnail:string};
@@ -222,13 +222,13 @@ export default function Home(){
       </div></section><section className="host-join"><p className="eyebrow">Guest entry</p><h2>{roomCode}</h2>{joinUrl&&<QRCodeSVG value={joinUrl} size={174} level="M" marginSize={1} bgColor="#fffdf7" fgColor="#111111"/>}<p>Guests scan this code to choose a name and add songs. No account needed.</p></section><QueuePanel room={room} busy={busy} onControl={control} host/></div></section>}
 
     {screen==="tv"&&<section className="tv-stage-full">
-      <header className="tv-top"><div className="tv-brand"><img src="/snax-profile-hd.png" alt="Snax the Bunny"/><strong>SNAX</strong><span>Karaoke</span></div><div className="tv-now">{room?.nowPlaying?<><span>Now singing</span><strong>{room.nowPlaying.singerName}</strong><a href={`https://www.youtube.com/watch?v=${room.nowPlaying.videoId}`} target="_blank" rel="noreferrer">{room.nowPlaying.videoTitle} ↗</a></>:<><span>Next up</span><strong>{room?.queue[0]?.singerName||"The stage is open"}</strong><em>{room?.queue[0]?.songTitle||"Add a song from your phone"}</em></>}</div></header>
+      <header className="tv-top"><div className="tv-brand"><img src="/snax-profile-hd.png" alt="Snax the Bunny"/><strong>SNAX</strong><span>Karaoke</span></div><div className="tv-now">{room?.nowPlaying?<><span>Now singing</span><FitText text={room.nowPlaying.singerName} max={34} min={18}/><a href={`https://www.youtube.com/watch?v=${room.nowPlaying.videoId}`} target="_blank" rel="noreferrer">{room.nowPlaying.videoTitle} ↗</a></>:<><span>Next up</span><FitText text={room?.queue[0]?.singerName||"The stage is open"} max={34} min={18}/><em>{room?.queue[0]?.songTitle||"Add a song from your phone"}</em></>}</div></header>
       <div className="tv-body">
         <div className="tv-video">
           {tvActivated&&room?.nowPlaying&&!interlude&&<div ref={playerMountRef} className="youtube-player"/>}
           {(!tvActivated||!room?.nowPlaying||interlude)&&<div className={`tv-idle ${interlude&&room?.nowPlaying?"tv-idle-interlude":""}`}>
             <img src="/snax-profile-hd.png" alt="Snax the Bunny" className="tv-idle-bunny"/>
-            <div className="tv-idle-copy"><span>{room?.nowPlaying?"Up next":room?.queue.length?"Up first":"Welcome to"}</span><strong>{room?.nowPlaying?.singerName||room?.queue[0]?.singerName||"Snax Karaoke"}</strong><em>{room?.nowPlaying?.songTitle||room?.queue[0]?.songTitle||"Scan the code. Pick a song. Take the mic."}</em>{!tvActivated&&<button onClick={()=>setTvActivated(true)}>Enable TV playback <span>▶</span></button>}</div>
+            <div className="tv-idle-copy"><span>{room?.nowPlaying?"Up next":room?.queue.length?"Up first":"Welcome to"}</span><FitText text={room?.nowPlaying?.singerName||room?.queue[0]?.singerName||"Snax Karaoke"} max={150} min={40}/><em>{room?.nowPlaying?.songTitle||room?.queue[0]?.songTitle||"Scan the code. Pick a song. Take the mic."}</em>{!tvActivated&&<button onClick={()=>setTvActivated(true)}>Enable TV playback <span>▶</span></button>}</div>
             {joinUrl&&<div className="tv-idle-qr"><QRCodeSVG value={joinUrl} size={220} level="M" marginSize={1} bgColor="#fffdf7" fgColor="#111111"/><strong>{roomCode}</strong><small>Scan to sing</small></div>}
           </div>}
         </div>
@@ -243,4 +243,16 @@ export default function Home(){
 
 function SnaxPortrait({small=false}:{small?:boolean}){return <div className={`snax-portrait-wrap ${small?"portrait-small":""}`}><div className="ear ear-left"/><div className="ear ear-right"/><img src="/snax-profile-hd.png" alt="Snax the Bunny" className="snax-portrait"/>{!small&&<span className="portrait-label">Hosted by Snax</span>}</div>}
 function Footer(){return <footer><strong>SNAX</strong><span>Despite all my rage, I am still just a rabbit on stage.</span><nav aria-label="Legal and social links"><a href="/privacy">Privacy</a><a href="/terms">Terms</a><a href="https://www.instagram.com/snaxthebunny/" target="_blank" rel="noreferrer">@snaxthebunny ↗</a></nav></footer>}
+// A singer's name always stays on one line on the TV: start at `max` px and shrink
+// until it fits the space it's given (re-measured whenever the container resizes).
+function FitText({text,max,min=18,className}:{text:string;max:number;min?:number;className?:string}){
+  const ref=useRef<HTMLElement|null>(null);
+  useLayoutEffect(()=>{
+    const el=ref.current; const box=el?.parentElement; if(!el||!box) return;
+    const fit=()=>{ el.style.fontSize=`${max}px`; const available=box.clientWidth; const needed=el.scrollWidth; if(needed>available&&needed>0) el.style.fontSize=`${Math.max(min,Math.floor(max*available/needed)-1)}px`; };
+    fit(); const observer=new ResizeObserver(fit); observer.observe(box); return()=>observer.disconnect();
+  },[text,max,min]);
+  return <strong ref={ref} className={className} style={{display:"block",whiteSpace:"nowrap",overflow:"hidden"}}>{text}</strong>;
+}
+
 function QueuePanel({room,busy,onControl,host=false}:{room:RoomState|null;busy:boolean;host?:boolean;onControl:(action:"move_up"|"move_down"|"delete",id:number)=>Promise<void>}){return <section className={`queue-panel ${host?"host-queue":""}`}><div className="queue-title"><div><p className="eyebrow">The lineup</p><h2>Who’s next?</h2></div><span>{room?.queue.length||0} waiting</span></div>{room?.nowPlaying&&<div className="now-card"><span>Now singing</span><strong>{room.nowPlaying.singerName}</strong><small>{room.nowPlaying.songTitle}</small></div>}<ol>{room?.queue.map((item,index)=><li key={item.id}><span className="queue-position">{index+1}</span><div className="queue-copy"><strong>{item.singerName}</strong><small>{item.songTitle}</small></div><div className="queue-actions"><button onClick={()=>void onControl("move_up",item.id)} disabled={busy||index===0} aria-label="Move song up">↑</button><button onClick={()=>void onControl("move_down",item.id)} disabled={busy||index===room.queue.length-1} aria-label="Move song down">↓</button><button onClick={()=>void onControl("delete",item.id)} disabled={busy} aria-label="Delete song">×</button></div></li>)}{!room?.queue.length&&<li className="empty-queue">No one’s waiting yet. The microphone is getting nervous.</li>}</ol></section>}
