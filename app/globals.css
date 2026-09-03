@@ -110,3 +110,13 @@ button:disabled{cursor:not-allowed;opacity:.48}.toast{position:fixed;z-index:100
 footer nav { display:flex; gap:18px; }
 footer nav a { color:inherit; font-size:12px; font-weight:800; letter-spacing:.08em; text-transform:uppercase; }
 .offline-flag { position:fixed; left:12px; bottom:12px; z-index:40; padding:8px 12px; border:3px solid var(--ink); background:var(--pink); font-size:11px; font-weight:900; letter-spacing:.1em; text-transform:uppercase; }
+
+/* Venmo tip card (singer view) */
+.singer-side{display:flex;flex-direction:column;min-width:0}
+.tip-card{padding:28px;border-bottom:4px solid var(--ink);background:var(--pink)}
+.tip-card h2{margin:4px 0 6px;font-family:Impact,Haettenschweiler,"Arial Narrow Bold",sans-serif;font-size:34px;line-height:1;text-transform:uppercase}
+.tip-card p:not(.eyebrow){margin:0 0 14px;font-size:14px;font-weight:700}
+.tip-amounts{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:10px}
+.tip-amounts button{padding:12px 0;border:3px solid var(--ink);background:var(--paper);font-size:18px;font-weight:900;cursor:pointer}
+.tip-amounts button.selected{background:var(--ink);color:#fff}
+.tip-go{display:flex;justify-content:space-between;width:100%;padding:15px 18px;border:3px solid var(--ink);background:#008cff;color:#fff;box-shadow:5px 5px 0 var(--ink);font-weight:900;text-transform:uppercase;cursor:pointer}
