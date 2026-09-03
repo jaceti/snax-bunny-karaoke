@@ -30,3 +30,14 @@ export const queueItems = sqliteTable("queue_items", {
 }, (table) => [
   index("idx_queue_room_status_order").on(table.roomCode, table.status, table.sortOrder),
 ]);
+
+// "Tonight's room": the one room the static QR codes on the hub and around the
+// venue join. Set when a host opens a room, re-claimable from the host console.
+// The invite token is stored in plain text here on purpose — it is the same
+// token printed into every singer QR code, so it is public by design.
+export const currentRoom = sqliteTable("current_room", {
+  id: integer("id").primaryKey(),
+  code: text("code").notNull(),
+  inviteToken: text("invite_token").notNull(),
+  updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
