@@ -7,6 +7,10 @@ export const rooms = sqliteTable("rooms", {
   inviteTokenHash: text("invite_token_hash").notNull(),
   tvTokenHash: text("tv_token_hash").notNull(),
   playbackStatus: text("playback_status", { enum: ["idle", "playing", "paused"] }).notNull().default("idle"),
+  // Host can close the room to new requests at the end of the night.
+  requestsOpen: integer("requests_open", { mode: "boolean" }).notNull().default(true),
+  // Optional last-call time. Requests close automatically CUTOFF_MINUTES before it.
+  endsAt: text("ends_at"),
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
 
