@@ -97,8 +97,8 @@ export default function PrivacyPage() {
           <p>
             When a result is selected, its title, YouTube video ID, and thumbnail link are stored
             only to operate the queue. A played or skipped selection is deleted immediately. Any
-            other queue selection is automatically deleted before it reaches 30 days through daily
-            cleanup and additional cleanup whenever the app is used.
+            other queue selection is automatically deleted before it reaches 30 days through
+            cleanup that runs whenever the app is used.
           </p>
           <p>
             The room code and hashed access credentials are not YouTube API data and remain
