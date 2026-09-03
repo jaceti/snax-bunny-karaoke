@@ -5,8 +5,8 @@ import { QRCodeSVG } from "qrcode.react";
 
 type Song={videoId:string;title:string;channel:string;thumbnail:string};
 type QueueItem={id:number;singerName:string;songTitle:string;videoTitle:string;videoId:string;thumbnailUrl:string;sortOrder:number;status:"pending"|"playing"|"done";startedAt:string|null;sungCount?:number};
-// Rabbit Box asked for a three-second "up next" card between songs.
-const INTERLUDE_MS=3000;
+// The "up next" card shows for ten seconds between songs (Snax's call).
+const INTERLUDE_MS=10_000;
 type RoomState={code:string;playbackStatus:"idle"|"playing"|"paused";requestsOpen:boolean;requestsToggle:boolean;endsAt:string|null;cutoffMinutes:number;isCurrent?:boolean;nowPlaying:QueueItem|null;queue:QueueItem[];completedCount:number};
 type Screen="landing"|"name"|"singer"|"host"|"tv";
 type Player={playVideo:()=>void;pauseVideo:()=>void;destroy?:()=>void};
