@@ -1,0 +1,20 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "snax-bunny-karaoke",
+  "compatibility_date": "2026-02-12",
+  "compatibility_flags": ["nodejs_compat"],
+
+  // Cloudflare account "Snax"
+  "account_id": "b0f1589936f87faae686bf430775fa17",
+
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "snax-karaoke",
+      "database_id": "198080d6-ea54-4ea4-97b6-cb9375064b98"
+    }
+  ],
+
+  // vinext's page cache. Off for now — room state must never be cached.
+  "cache": { "enabled": false }
+}
