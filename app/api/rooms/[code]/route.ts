@@ -28,15 +28,14 @@ function requestsAreOpen(room:{requests_open:number;ends_at:string|null}) {
 
 async function state(code:string) {
   const db=dbBinding();
-  const room=await db.prepare("SELECT code, playback_status, requests_open, ends_at FROM rooms WHERE code = ?").bind(code).first<{code:string;playback_status:"idle"|"playing"|"paused";requests_open:number;ends_at:string|null}>();
+  const room=await db.prepare("SELECT code, playback_status, requests_open, ends_at, completed_count FROM rooms WHERE code = ?").bind(code).first<{code:string;playback_status:"idle"|"playing"|"paused";requests_open:number;ends_at:string|null;completed_count:number}>();
   if(!room) return null;
-  const [now,waiting,completed,current]=await Promise.all([
+  const [now,waiting,current]=await Promise.all([
     db.prepare("SELECT id,singer_name,song_title,video_title,video_id,thumbnail_url,sort_order,status,started_at FROM queue_items WHERE room_code=? AND status='playing' ORDER BY sort_order LIMIT 1").bind(code).first<QueueRow>(),
     db.prepare("SELECT id,singer_name,song_title,video_title,video_id,thumbnail_url,sort_order,status,started_at FROM queue_items WHERE room_code=? AND status='pending' ORDER BY sort_order LIMIT 100").bind(code).all<QueueRow>(),
-    db.prepare("SELECT COUNT(*) AS count FROM queue_items WHERE room_code=? AND status='done'").bind(code).first<{count:number}>(),
     db.prepare("SELECT code FROM current_room WHERE id=1").first<{code:string}>().catch(()=>null),
   ]);
-  return { code, playbackStatus:room.playback_status, requestsOpen:requestsAreOpen(room), requestsToggle:!!room.requests_open, endsAt:room.ends_at, cutoffMinutes:CUTOFF_MINUTES, isCurrent:current?.code===code, nowPlaying:now?queueItem(now):null, queue:waiting.results.map(queueItem), completedCount:Number(completed?.count||0) };
+  return { code, playbackStatus:room.playback_status, requestsOpen:requestsAreOpen(room), requestsToggle:!!room.requests_open, endsAt:room.ends_at, cutoffMinutes:CUTOFF_MINUTES, isCurrent:current?.code===code, nowPlaying:now?queueItem(now):null, queue:waiting.results.map(queueItem), completedCount:Number(room.completed_count||0) };
 }
 
 export async function GET(request:Request, context:{params:Promise<{code:string}>}) {
@@ -52,6 +51,8 @@ export async function POST(request:Request, context:{params:Promise<{code:string
     if(!singerName||!songTitle||!videoTitle||!/^[A-Za-z0-9_-]{6,20}$/.test(videoId)) return Response.json({error:"That song selection is missing a detail."},{status:400});
     const db=dbBinding(); const room=await state(code); if(!room) return Response.json({error:"That room has left the building."},{status:404});
     if(!room.requestsOpen) return Response.json({error:"Requests are closed for tonight. The bunny is tired."},{status:409});
+    // Cleanup whenever the app is used: no YouTube data lingers past 30 days.
+    await db.prepare("DELETE FROM queue_items WHERE created_at < datetime('now','-30 days')").run().catch(()=>{});
     const order=await db.prepare("SELECT COALESCE(MAX(sort_order),0)+1 AS next_order FROM queue_items WHERE room_code=?").bind(code).first<{next_order:number}>();
     await db.prepare("INSERT INTO queue_items (room_code,singer_name,song_title,video_title,video_id,thumbnail_url,sort_order,status) VALUES (?,?,?,?,?,?,?,'pending')").bind(code,singerName,songTitle,videoTitle,videoId,thumbnailUrl,Number(order?.next_order||1)).run();
     return Response.json(await state(code),{status:201});
@@ -62,7 +63,7 @@ export async function PATCH(request:Request, context:{params:Promise<{code:strin
   try {
     const code=codeOf((await context.params).code); const isHost=await verify(code,request,"host"); const isTv=isHost?false:await verify(code,request,"tv"); const isGuest=isHost||isTv?false:await verify(code,request,"invite");
     if(!isHost&&!isTv&&!isGuest) return Response.json({error:"This control needs a private room link."},{status:403});
-    const {action,itemId,requestsOpen,endsAt,inviteToken}=await request.json() as {action?:"play"|"pause"|"skip"|"complete"|"move_up"|"move_down"|"delete"|"set_requests"|"set_end_time"|"reset_event"|"claim_current";itemId?:number;requestsOpen?:boolean;endsAt?:string|null;inviteToken?:string};
+    const {action,itemId,requestsOpen,endsAt,inviteToken,tvToken}=await request.json() as {action?:"play"|"pause"|"skip"|"complete"|"move_up"|"move_down"|"delete"|"set_requests"|"set_end_time"|"reset_event"|"claim_current";itemId?:number;requestsOpen?:boolean;endsAt?:string|null;inviteToken?:string;tvToken?:string};
     if(!action) return Response.json({error:"Unknown room control."},{status:400});
     if(["play","pause","skip","set_requests","set_end_time","reset_event","claim_current"].includes(action)&&!isHost) return Response.json({error:"Only the host can control the room."},{status:403});
 
@@ -70,9 +71,10 @@ export async function PATCH(request:Request, context:{params:Promise<{code:strin
       // Make this room the one the printed singer QR codes join. The host proves it
       // holds the real invite token before we publish it.
       const db0=dbBinding();
-      const row=await db0.prepare("SELECT invite_token_hash FROM rooms WHERE code=?").bind(code).first<{invite_token_hash:string}>();
+      const row=await db0.prepare("SELECT invite_token_hash, tv_token_hash FROM rooms WHERE code=?").bind(code).first<{invite_token_hash:string;tv_token_hash:string}>();
       if(!row||!inviteToken||row.invite_token_hash!==await hash(inviteToken)) return Response.json({error:"That invite link doesn’t match this room."},{status:400});
-      await db0.prepare("INSERT INTO current_room (id, code, invite_token, updated_at) VALUES (1, ?, ?, CURRENT_TIMESTAMP) ON CONFLICT(id) DO UPDATE SET code = excluded.code, invite_token = excluded.invite_token, updated_at = CURRENT_TIMESTAMP").bind(code,inviteToken).run();
+      const tv = tvToken && row.tv_token_hash===await hash(tvToken) ? tvToken : null;
+      await db0.prepare("INSERT INTO current_room (id, code, invite_token, tv_token, updated_at) VALUES (1, ?, ?, ?, CURRENT_TIMESTAMP) ON CONFLICT(id) DO UPDATE SET code = excluded.code, invite_token = excluded.invite_token, tv_token = excluded.tv_token, updated_at = CURRENT_TIMESTAMP").bind(code,inviteToken,tv).run();
       return Response.json(await state(code));
     }
 
@@ -89,7 +91,7 @@ export async function PATCH(request:Request, context:{params:Promise<{code:strin
       const db2=dbBinding();
       await db2.batch([
         db2.prepare("DELETE FROM queue_items WHERE room_code=?").bind(code),
-        db2.prepare("UPDATE rooms SET playback_status='idle', requests_open=1, ends_at=NULL WHERE code=?").bind(code),
+        db2.prepare("UPDATE rooms SET playback_status='idle', requests_open=1, ends_at=NULL, completed_count=0 WHERE code=?").bind(code),
       ]);
       return Response.json(await state(code));
     }
@@ -108,7 +110,9 @@ export async function PATCH(request:Request, context:{params:Promise<{code:strin
       return Response.json(await state(code));
     }
     const current=await db.prepare("SELECT id FROM queue_items WHERE room_code=? AND status='playing' ORDER BY sort_order LIMIT 1").bind(code).first<{id:number}>();
-    if((action==="complete"||action==="skip")&&current){ if(itemId&&itemId!==current.id) return Response.json(await state(code)); await db.prepare("UPDATE queue_items SET status='done',finished_at=CURRENT_TIMESTAMP WHERE id=?").bind(current.id).run(); }
+    if((action==="complete"||action==="skip")&&current){ if(itemId&&itemId!==current.id) return Response.json(await state(code));
+      // Privacy policy: a played or skipped selection is deleted immediately. Keep only a tally.
+      await db.batch([db.prepare("DELETE FROM queue_items WHERE id=?").bind(current.id), db.prepare("UPDATE rooms SET completed_count=completed_count+1 WHERE code=?").bind(code)]); }
     if(action==="pause") await db.prepare("UPDATE rooms SET playback_status='paused' WHERE code=?").bind(code).run();
     if(action==="play") {
       if(!current){ const next=await db.prepare("SELECT id FROM queue_items WHERE room_code=? AND status='pending' ORDER BY sort_order LIMIT 1").bind(code).first<{id:number}>(); if(next) await db.prepare("UPDATE queue_items SET status='playing',started_at=CURRENT_TIMESTAMP WHERE id=?").bind(next.id).run(); }
