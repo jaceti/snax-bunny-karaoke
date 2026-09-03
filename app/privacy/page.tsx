@@ -33,7 +33,7 @@ export default function PrivacyPage() {
             <li>Song titles, YouTube video IDs, and thumbnail links selected for the queue.</li>
             <li>Limited technical logs that the hosting service may process for security, reliability, and troubleshooting.</li>
           </ul>
-          <p>We do not ask guests for passwords, payment information, or a Google or ChatGPT login.</p>
+          <p>We do not ask guests for passwords, payment information, or a Google login.</p>
         </article>
 
         <article>
@@ -117,7 +117,8 @@ export default function PrivacyPage() {
           <h2>Sharing and service providers</h2>
           <p>
             We share information only as needed to operate the service with our website-hosting
-            provider and Google/YouTube. We may also disclose information when required by law or
+            provider (Cloudflare) and Google/YouTube. The optional &ldquo;Hot Tips&rdquo; button opens
+            Venmo in a new window or app; we do not process, see, or store any payment information. We may also disclose information when required by law or
             to protect the service and its users. We do not sell personal information.
           </p>
         </article>
