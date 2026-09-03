@@ -34,7 +34,8 @@ export default function Home(){
   // INTERLUDE_MS, then the next video takes the whole player area — nothing is ever
   // drawn on top of the YouTube player itself.
   const [interlude,setInterlude]=useState(false);
-  const [nextPage,setNextPage]=useState<string|null>(null); const [lastQuery,setLastQuery]=useState("");
+  // Local paging through one search's results — never triggers another YouTube call.
+  const PAGE_SIZE=12; const [shown,setShown]=useState(PAGE_SIZE);
   const [consent,setConsent]=useState(false);
   const [endsAtInput,setEndsAtInput]=useState("");
   const [offline,setOffline]=useState(false);
@@ -169,21 +170,21 @@ export default function Home(){
     catch(error){setNotice(messageOf(error));}finally{setBusy(false);}
   }
 
-  async function runSearch(term:string,page:string|null){
+  async function runSearch(term:string){
     setSearching(true);setNotice("");
-    try{const response=await fetch(`/api/search?q=${encodeURIComponent(term)}${page?`&page=${encodeURIComponent(page)}`:""}`,{headers:{"x-room-code":roomCode,"x-room-invite":inviteRef.current}});const data=await response.json() as {results?:Song[];nextPage?:string|null;error?:string};if(!response.ok)throw new Error(data.error||"Search took a mic break.");
-      const incoming=data.results||[]; setResults(previous=>{const seen=new Set(page?previous.map(item=>item.videoId):[]); return [...(page?previous:[]),...incoming.filter(item=>!seen.has(item.videoId))];}); setNextPage(data.nextPage||null); setLastQuery(term);
-      if(!page&&!incoming.length)setNotice("No karaoke tracks found. Try adding the artist name.");}
+    try{const response=await fetch(`/api/search?q=${encodeURIComponent(term)}`,{headers:{"x-room-code":roomCode,"x-room-invite":inviteRef.current}});const data=await response.json() as {results?:Song[];error?:string};if(!response.ok)throw new Error(data.error||"Search took a mic break.");
+      const incoming=data.results||[]; setResults(incoming); setShown(PAGE_SIZE);
+      if(!incoming.length)setNotice("No karaoke tracks found. Try adding the artist name.");}
     catch(error){setNotice(messageOf(error));}finally{setSearching(false);}
   }
   async function search(event:FormEvent){
-    event.preventDefault();const term=query.trim();if(term.length<2)return;await runSearch(term,null);
+    event.preventDefault();const term=query.trim();if(term.length<2)return;await runSearch(term);
   }
 
 
   async function addSong(song:Song){
     setBusy(true);setNotice("");
-    try{const response=await fetch(`/api/rooms/${roomCode}`,{method:"POST",headers:{"content-type":"application/json","x-room-invite":inviteRef.current},body:JSON.stringify({singerName:singerName.trim(),songTitle:song.title,videoTitle:song.title,videoId:song.videoId,thumbnailUrl:song.thumbnail})});const data=await response.json() as RoomState&{error?:string};if(!response.ok)throw new Error(data.error||"That song missed the queue.");setRoom(data);setResults([]);setNextPage(null);setQuery("");setNotice("Your song is in the lineup!");}
+    try{const response=await fetch(`/api/rooms/${roomCode}`,{method:"POST",headers:{"content-type":"application/json","x-room-invite":inviteRef.current},body:JSON.stringify({singerName:singerName.trim(),songTitle:song.title,videoTitle:song.title,videoId:song.videoId,thumbnailUrl:song.thumbnail})});const data=await response.json() as RoomState&{error?:string};if(!response.ok)throw new Error(data.error||"That song missed the queue.");setRoom(data);setResults([]);setShown(PAGE_SIZE);setQuery("");setNotice("Your song is in the lineup!");}
     catch(error){setNotice(messageOf(error));}finally{setBusy(false);}
   }
 
@@ -219,7 +220,7 @@ export default function Home(){
 
     {screen==="name"&&<section className="phone-stage"><button className="wordmark" onClick={home}>SNAX</button><div className="phone-card name-card"><SnaxPortrait small/><p className="eyebrow">Room {roomCode}</p><h1>What’s your stage name?</h1><form onSubmit={(event)=>{event.preventDefault();if(!singerName.trim()){setNotice("Give us a stage name first.");return;}if(!consent){setNotice("Tick the box and you’re in.");return;}setScreen("singer");}}><label htmlFor="singer">Name</label><input id="singer" value={singerName} onChange={event=>setSingerName(event.target.value)} maxLength={32} placeholder="Bunnyoncé" autoFocus/><label className="consent-check"><input type="checkbox" checked={consent} onChange={event=>acceptConsent(event.target.checked)}/><span>I agree to the <a href="/privacy">Privacy Policy</a>, <a href="/terms">Terms</a>, and <a href="https://www.youtube.com/t/terms" target="_blank" rel="noreferrer">YouTube Terms</a>.</span></label><button disabled={busy||!consent}>Enter the room <span>→</span></button></form><p className="fine">No sign-in. Just songs.</p></div></section>}
 
-    {screen==="singer"&&<section className="singer-stage"><header className="app-header"><button className="wordmark" onClick={home}>SNAX</button><span>Room <strong>{roomCode}</strong></span><span className="singer-chip">{singerName}</span></header><div className="singer-grid"><div className="search-panel"><p className="eyebrow">You’re in, {singerName}</p><h1>Pick your song</h1>{room&&!room.requestsOpen&&<p className="requests-closed">Requests are closed for tonight. The bunny is tired.</p>}{(!room||room.requestsOpen)&&<><form className="song-search" onSubmit={search}><label htmlFor="song">Search a song or artist</label><div><input id="song" value={query} onChange={event=>setQuery(event.target.value)} placeholder="Robyn, Chappell Roan, ABBA…"/><button disabled={searching}>{searching?"Searching…":"Find karaoke"}</button></div><small>We automatically add “karaoke lyrics” to every YouTube search.</small></form><div className="results">{results.map(song=><article key={song.videoId}><img src={song.thumbnail} alt=""/><div><strong><a href={`https://www.youtube.com/watch?v=${song.videoId}`} target="_blank" rel="noreferrer" title="Open on YouTube">{song.title}</a></strong><small>{song.channel}</small><button onClick={()=>void addSong(song)} disabled={busy}>Add to lineup +</button></div></article>)}</div>{nextPage&&results.length>0&&<button type="button" className="load-more" disabled={searching} onClick={()=>void runSearch(lastQuery,nextPage)}>{searching?"Loading…":"More results ↓"}</button>}</>}</div><QueuePanel room={room} busy={busy} onControl={control}/></div></section>}
+    {screen==="singer"&&<section className="singer-stage"><header className="app-header"><button className="wordmark" onClick={home}>SNAX</button><span>Room <strong>{roomCode}</strong></span><span className="singer-chip">{singerName}</span></header><div className="singer-grid"><div className="search-panel"><p className="eyebrow">You’re in, {singerName}</p><h1>Pick your song</h1>{room&&!room.requestsOpen&&<p className="requests-closed">Requests are closed for tonight. The bunny is tired.</p>}{(!room||room.requestsOpen)&&<><form className="song-search" onSubmit={search}><label htmlFor="song">Search a song or artist</label><div><input id="song" value={query} onChange={event=>setQuery(event.target.value)} placeholder="Robyn, Chappell Roan, ABBA…"/><button disabled={searching}>{searching?"Searching…":"Find karaoke"}</button></div><small>We automatically add “karaoke lyrics” to every YouTube search.</small></form><div className="results">{results.slice(0,shown).map(song=><article key={song.videoId}><img src={song.thumbnail} alt=""/><div><strong><a href={`https://www.youtube.com/watch?v=${song.videoId}`} target="_blank" rel="noreferrer" title="Open on YouTube">{song.title}</a></strong><small>{song.channel}</small><button onClick={()=>void addSong(song)} disabled={busy}>Add to lineup +</button></div></article>)}</div>{results.length>shown&&<button type="button" className="load-more" onClick={()=>setShown(count=>count+PAGE_SIZE)}>Show more ({results.length-shown} left) ↓</button>}{results.length>0&&results.length<=shown&&<p className="results-end">That’s every match for this search. Try adding the artist or a word from the title for more.</p>}</>}</div><QueuePanel room={room} busy={busy} onControl={control}/></div></section>}
 
     {screen==="host"&&<section className="host-stage"><header className="app-header"><button className="wordmark" onClick={home}>SNAX</button><div className="host-room">Host console · Room <strong>{roomCode}</strong></div></header><div className="host-grid"><section className="host-controls"><p className="eyebrow">Playback</p><h1>{room?.nowPlaying?room.nowPlaying.singerName:"Ready when you are"}</h1><p className="current-song">{room?.nowPlaying?.songTitle||"Start playback when the first song hits the lineup."}</p><div className="control-row"><button className="play-control" onClick={()=>void control(room?.playbackStatus==="playing"?"pause":"play")} disabled={busy||(!room?.nowPlaying&&!room?.queue.length)}>{room?.playbackStatus==="playing"?"Pause":"Play"} <span>{room?.playbackStatus==="playing"?"Ⅱ":"▶"}</span></button><button onClick={()=>void control("skip",room?.nowPlaying?.id)} disabled={busy||!room?.nowPlaying}>Skip <span>→</span></button></div>
       <div className="event-controls">
