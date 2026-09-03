@@ -25,6 +25,8 @@ export async function POST() {
       const code = makeCode();
       try {
         await db.prepare("INSERT INTO rooms (code, host_token_hash, invite_token_hash, tv_token_hash) VALUES (?, ?, ?, ?)").bind(code, hostTokenHash, inviteTokenHash, tvTokenHash).run();
+        // The newest room becomes "tonight's room" so the printed singer QR codes join it.
+        await db.prepare("INSERT INTO current_room (id, code, invite_token, updated_at) VALUES (1, ?, ?, CURRENT_TIMESTAMP) ON CONFLICT(id) DO UPDATE SET code = excluded.code, invite_token = excluded.invite_token, updated_at = CURRENT_TIMESTAMP").bind(code, inviteToken).run().catch(() => {});
         return Response.json({ code, hostToken, inviteToken, tvToken }, { status: 201 });
       } catch (error) {
         const message = error instanceof Error ? error.message : "";
