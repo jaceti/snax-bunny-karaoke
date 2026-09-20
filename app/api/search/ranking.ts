@@ -8,8 +8,10 @@ export type VideoDetails = {
 // Verified official YouTube channel IDs, September 2026. Match IDs, never a
 // copied brand name in a title. These are preferences, not playback guarantees.
 // Sources: singking.com, karafun.com, stingray.com/thekaraokechannel,
-// sing2music.com/sing2karaoke and their official YouTube channels.
+// sing2music.com/sing2karaoke, zoom-entertainments.co.uk and their official YouTube channels.
+const ZOOM_CHANNEL_ID = "UCrk8mp-ugqtAbjif6JARjlw";
 export const PREFERRED_CHANNELS = new Map([
+  [ZOOM_CHANNEL_ID, "Zoom Karaoke Official"],
   ["UCwTRjvjVge51X-ILJ4i22ew", "Sing King"],
   ["UCbqcG1rdt9LMwOJN4PyGTKg", "KaraFun Karaoke"],
   ["UCYi9TC1HC_U2kaRAK6I4FSQ", "Stingray Karaoke"],
@@ -45,7 +47,10 @@ export function karaokeScore(video: VideoDetails, query: string, originalRank: n
   if (/\bkaraoke\b/.test(channel)) score += 8;
   if (video.contentDetails?.definition === "hd") score += 8;
   // A trusted brand must still match the requested song and not say no lyrics.
-  if (match >= .75 && !noLyrics && PREFERRED_CHANNELS.has(video.snippet?.channelId || "")) score += 25;
+  if (match >= .75 && !noLyrics && PREFERRED_CHANNELS.has(video.snippet?.channelId || "")) {
+    // Snax's first-choice provider; stronger than the other brand preferences.
+    score += video.snippet?.channelId === ZOOM_CHANNEL_ID ? 55 : 25;
+  }
   if (noLyrics) score -= 90;
   if (!lyrics && /\binstrumental\b|\bbacking track\b/.test(title)) score -= 20;
   if (/\bofficial (?:music )?video\b|\blyric video\b/.test(title) && !karaoke) score -= 40;

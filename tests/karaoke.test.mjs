@@ -119,6 +119,19 @@ test('lyrics karaoke outranks instrumentals, music videos and explicit no-lyrics
   assert.ok(preferred > score('Other Song Karaoke Lyrics'));
 });
 
+test('Zoom is the top brand for equivalent lyric matches, without boosting unrelated songs', () => {
+  const base = details('ABBA Dancing Queen Karaoke Lyrics');
+  const zoom = { ...base, snippet: { ...base.snippet, channelId: 'UCrk8mp-ugqtAbjif6JARjlw' } };
+  for (const channelId of PREFERRED_CHANNELS.keys()) {
+    if (channelId === zoom.snippet.channelId) continue;
+    const alternative = { ...base, snippet: { ...base.snippet, channelId } };
+    assert.ok(karaokeScore(zoom, 'ABBA Dancing Queen', 49) > karaokeScore(alternative, 'ABBA Dancing Queen', 0));
+  }
+  const unrelated = { ...zoom, snippet: { ...zoom.snippet, title: 'Different Song Karaoke Lyrics' } };
+  assert.ok(karaokeScore(base, 'ABBA Dancing Queen', 0) > karaokeScore(unrelated, 'ABBA Dancing Queen', 0));
+  assert.equal(playable({ ...zoom, status: { ...zoom.status, embeddable: false } }, 'US'), false);
+});
+
 test('known blocked, private, age-restricted, live and region-restricted uploads are excluded', () => {
   const good = details('Karaoke with lyrics');
   assert.equal(playable(good, 'US'), true);
