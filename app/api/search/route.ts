@@ -1,4 +1,5 @@
 import { env } from "cloudflare:workers";
+import { karaokeScore, playable, type VideoDetails } from "./ranking";
 
 type YouTubeSearchItem = { id?: { videoId?: string }; snippet?: { title?: string; channelTitle?: string; thumbnails?: { medium?: { url?: string }; default?: { url?: string } } } };
 
@@ -27,14 +28,27 @@ export async function GET(request: Request) {
     const url = new URL(request.url);
     const q = url.searchParams.get("q")?.trim().slice(0, 100) || "";
     if (q.length < 2) return Response.json({ results: [] });
-    // One search = one YouTube API call. Every search.list call costs the same quota
-    // whatever maxResults is, so we take the maximum (50) and let the phone page
-    // through those locally — no further API calls until the guest types a new search.
-    const params = new URLSearchParams({ part: "snippet", type: "video", videoEmbeddable: "true", safeSearch: "moderate", maxResults: "50", q: `${q} karaoke lyrics`, key });
+    // One search request, plus one batched metadata check for up to 50 matches.
+    // Paging through these results never triggers another YouTube search.
+    const region = "US";
+    const params = new URLSearchParams({ part: "snippet", type: "video", videoEmbeddable: "true", videoSyndicated: "true", regionCode: region, safeSearch: "moderate", maxResults: "50", q: `${q} karaoke lyrics`, key });
     const youtube = await fetch(`https://www.googleapis.com/youtube/v3/search?${params}`);
     const data = await youtube.json() as { items?: YouTubeSearchItem[]; error?: { message?: string } };
     if (!youtube.ok) throw new Error(data.error?.message || "YouTube search took a mic break.");
-    const results = (data.items || []).flatMap((item) => item.id?.videoId && item.snippet ? [{ videoId: item.id.videoId, title: decode(item.snippet.title || "Karaoke track"), channel: decode(item.snippet.channelTitle || "YouTube"), thumbnail: item.snippet.thumbnails?.medium?.url || item.snippet.thumbnails?.default?.url || "" }] : []);
+    const items = data.items || [];
+    const ids = [...new Set(items.flatMap(item => item.id?.videoId ? [item.id.videoId] : []))];
+    if (!ids.length) return Response.json({ results: [] }, { headers: { "cache-control": "no-store" } });
+    const detailParams = new URLSearchParams({ part: "snippet,status,contentDetails", id: ids.join(","), key });
+    const detailResponse = await fetch(`https://www.googleapis.com/youtube/v3/videos?${detailParams}`);
+    const details = await detailResponse.json() as { items?: VideoDetails[] };
+    if (!detailResponse.ok) throw new Error("We couldn’t check which tracks can play. Please try searching again.");
+    const byId = new Map((details.items || []).map(video => [video.id, video]));
+    const results = items.flatMap((item, index) => {
+      const id = item.id?.videoId;
+      const video = id ? byId.get(id) : undefined;
+      if (!id || !item.snippet || !video || !playable(video, region)) return [];
+      return [{ videoId: id, title: decode(item.snippet.title || "Karaoke track"), channel: decode(item.snippet.channelTitle || "YouTube"), thumbnail: item.snippet.thumbnails?.medium?.url || item.snippet.thumbnails?.default?.url || "", score: karaokeScore(video, q, index) }];
+    }).sort((a, b) => b.score - a.score).map(({ score, ...song }) => song);
     return Response.json({ results }, { headers: { "cache-control": "no-store" } });
   } catch (error) {
     return Response.json({ error: error instanceof Error ? error.message : "Search took a mic break." }, { status: 500 });

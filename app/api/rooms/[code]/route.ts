@@ -63,9 +63,9 @@ export async function PATCH(request:Request, context:{params:Promise<{code:strin
   try {
     const code=codeOf((await context.params).code); const isHost=await verify(code,request,"host"); const isTv=isHost?false:await verify(code,request,"tv"); const isGuest=isHost||isTv?false:await verify(code,request,"invite");
     if(!isHost&&!isTv&&!isGuest) return Response.json({error:"This control needs a private room link."},{status:403});
-    const {action,itemId,requestsOpen,endsAt,inviteToken,tvToken}=await request.json() as {action?:"play"|"pause"|"skip"|"complete"|"move_up"|"move_down"|"delete"|"set_requests"|"set_end_time"|"reset_event"|"claim_current"|"balance";itemId?:number;requestsOpen?:boolean;endsAt?:string|null;inviteToken?:string;tvToken?:string};
+    const {action,itemId,requestsOpen,endsAt,inviteToken,tvToken}=await request.json() as {action?:"play"|"pause"|"skip"|"complete"|"move_up"|"move_down"|"delete"|"set_requests"|"set_end_time"|"reset_event"|"claim_current"|"balance"|"clear_queue";itemId?:number;requestsOpen?:boolean;endsAt?:string|null;inviteToken?:string;tvToken?:string};
     if(!action) return Response.json({error:"Unknown room control."},{status:400});
-    if(["play","pause","skip","set_requests","set_end_time","reset_event","claim_current","balance","move_up","move_down","delete"].includes(action)&&!isHost) return Response.json({error:"Only the host can control the room."},{status:403});
+    if(["play","pause","skip","set_requests","set_end_time","reset_event","claim_current","balance","clear_queue","move_up","move_down","delete"].includes(action)&&!isHost) return Response.json({error:"Only the host can control the room."},{status:403});
 
     if(action==="claim_current") {
       // Make this room the one the printed singer QR codes join. The host proves it
@@ -100,6 +100,11 @@ export async function PATCH(request:Request, context:{params:Promise<{code:strin
       return Response.json(await state(code));
     }
 
+    if(action==="clear_queue") {
+      await dbBinding().prepare("DELETE FROM queue_items WHERE room_code=? AND status='pending'").bind(code).run();
+      return Response.json(await state(code));
+    }
+
     if(action==="balance") {
       // Fair rotation: nobody sings twice until everyone waiting has had a turn, and
       // people who have sung less tonight go first. Ties go to whoever asked first —
@@ -128,6 +133,8 @@ export async function PATCH(request:Request, context:{params:Promise<{code:strin
       return Response.json(await state(code));
     }
     const current=await db.prepare("SELECT id FROM queue_items WHERE room_code=? AND status='playing' ORDER BY sort_order LIMIT 1").bind(code).first<{id:number}>();
+    // Ignore repeated or delayed end events after the TV has moved on.
+    if(action==="complete"&&(!current||!itemId||itemId!==current.id)) return Response.json(await state(code));
     if((action==="complete"||action==="skip")&&current){ if(itemId&&itemId!==current.id) return Response.json(await state(code));
       // Privacy policy: a played or skipped selection is deleted immediately. Keep only a tally.
       const singer=await db.prepare("SELECT singer_name FROM queue_items WHERE id=?").bind(current.id).first<{singer_name:string}>();
@@ -143,7 +150,11 @@ export async function PATCH(request:Request, context:{params:Promise<{code:strin
     }
     if(action==="complete"||action==="skip") {
       const next=await db.prepare("SELECT id FROM queue_items WHERE room_code=? AND status='pending' ORDER BY sort_order LIMIT 1").bind(code).first<{id:number}>();
-      if(next){ await db.prepare("UPDATE queue_items SET status='playing',started_at=CURRENT_TIMESTAMP WHERE id=?").bind(next.id).run(); await db.prepare("UPDATE rooms SET playback_status='playing' WHERE code=?").bind(code).run(); }
+      if(next){
+        await db.prepare("UPDATE queue_items SET status='playing',started_at=CURRENT_TIMESTAMP WHERE id=?").bind(next.id).run();
+        // A host pause wins even when it arrives during the song transition.
+        await db.prepare("UPDATE rooms SET playback_status=CASE WHEN playback_status='paused' THEN 'paused' ELSE 'playing' END WHERE code=?").bind(code).run();
+      }
       else await db.prepare("UPDATE rooms SET playback_status='idle' WHERE code=?").bind(code).run();
     }
     return Response.json(await state(code));
