@@ -265,7 +265,11 @@ export default function Home(){
       </div></section></div></section>}
 
     {screen==="tv"&&<section className="tv-stage-full">
-      <header className="tv-top"><div className="tv-brand"><img src="/snax-profile-hd.png" alt="Snax the Bunny"/><strong>SNAX</strong><span>Karaoke</span></div><div className="tv-now" aria-live="polite">{room?.nowPlaying?<><span>{room.playbackStatus==="paused"?"Paused · Now singing":interlude?"Up next":"Now singing"}</span><FitText text={room.nowPlaying.singerName} max={40} min={18}/><a href={`https://www.youtube.com/watch?v=${room.nowPlaying.videoId}`} target="_blank" rel="noreferrer">{room.nowPlaying.videoTitle} ↗</a></>:<><span>Next up</span><FitText text={room?.queue[0]?.singerName||"The stage is open"} max={40} min={18}/><em>{room?.queue[0]?.songTitle||"Add a song from your phone"}</em></>}</div></header>
+      <header className="tv-top">
+        <div className="tv-brand"><img src="/snax-profile-hd.png" alt="Snax the Bunny"/><strong>SNAX</strong><span>Karaoke</span></div>
+        <div className="tv-now" aria-live="polite">{room?.nowPlaying?<><span>{room.playbackStatus==="paused"?"Paused · Now singing":interlude?"Taking the mic":"Now singing"}</span><FitText text={room.nowPlaying.singerName} max={40} min={18}/><a href={`https://www.youtube.com/watch?v=${room.nowPlaying.videoId}`} target="_blank" rel="noreferrer">{room.nowPlaying.videoTitle} ↗</a></>:<><span>Now singing</span><FitText text="The stage is open" max={40} min={18}/><em>Ready when you are</em></>}</div>
+        <div className="tv-now tv-next" aria-live="polite"><span>Up next</span><FitText text={room?.queue[0]?.singerName||"You could be next"} max={34} min={18}/><em>{room?.queue[0]?.songTitle||"Scan the QR to add a song"}</em></div>
+      </header>
       <div className="tv-body">
         <div className="tv-video">
           <div ref={playerMountRef} className="youtube-player" style={{visibility:room?.nowPlaying&&!interlude?"visible":"hidden"}} aria-hidden={!room?.nowPlaying||interlude}/>

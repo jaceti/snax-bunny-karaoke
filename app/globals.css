@@ -124,5 +124,11 @@ footer nav a { color:inherit; font-size:12px; font-weight:800; letter-spacing:.0
 
 .tv-playback-prompt{padding:14px;background:var(--paper);color:var(--ink);border:3px solid var(--pink);font-size:14px;line-height:1.4}.tv-playback-prompt p{margin:0 0 12px}.tv-playback-prompt button{width:100%;padding:12px;font-weight:800;background:var(--pink);color:var(--ink);border:2px solid var(--ink);cursor:pointer}
 
+/* Keep the current and next singer side by side above the video. */
+.tv-top{grid-template-columns:auto minmax(0,1fr) minmax(0,.8fr)}
+.tv-next{border-left:2px solid var(--pink);padding-left:22px}
+.tv-next>span{color:var(--snax-blue)}
+@media(max-width:650px){.tv-top{gap:12px;padding:0 12px}.tv-next{padding-left:12px}.tv-brand{gap:4px;padding:4px}.tv-brand img{width:28px;height:28px}.tv-brand strong{font-size:22px}.tv-brand>span{display:none}.tv-now>span{font-size:12px}.tv-now>a,.tv-now>em{font-size:13px}}
+
 /* Compact host console. */
 .host-controls{padding-top:24px;padding-bottom:24px}.host-night{padding-top:24px}.host-controls h1{font-size:clamp(44px,5vw,76px);line-height:1}.host-controls .control-row{margin-top:22px}.host-queue{padding-top:24px}.host-controls .current-song{margin:16px 0;font-size:22px}@media(max-width:1000px){.host-night{grid-column:1;grid-row:auto}.host-controls{border-right:0}}
