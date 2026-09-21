@@ -1,5 +1,5 @@
 export type WheelEntry={name:string;songTitle:string;queueId:number|null;filler:boolean};
-export type WheelState={id:string;phase:"ready"|"spinning"|"winner";entries:WheelEntry[];winnerIndex:number|null;startedAt:number|null;endsAt:number|null;rotation:number};
+export type WheelState={id:string;phase:"ready"|"spinning"|"winner";entries:WheelEntry[];winnerIndex:number|null;startedAt:number|null;endsAt:number|null;rotation:number;interruptedQueueId?:number|null};
 export const WHEEL_DURATION=7000;
 // Keep movement perceptible until the landing, rather than crawling for seconds.
 export function wheelEase(progress:number){return 1-Math.pow(1-Math.max(0,Math.min(1,progress)),2);}

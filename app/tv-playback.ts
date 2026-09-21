@@ -6,6 +6,9 @@ export type TvPlayer = {
   cueVideoById(id: string): void;
   loadVideoById(id: string): void;
   getVideoData(): { video_id?: string };
+  getPlayerState?(): number;
+  getCurrentTime?(): number;
+  getDuration?(): number;
   destroy(): void;
 };
 
@@ -16,6 +19,7 @@ export class TvPlayback {
   private song: TvSong | null = null;
   private loaded: number | null = null;
   private status: PlaybackStatus = "idle";
+  private wheelOpen = false;
   private interlude = false;
   private hasHadSong = false;
   private started = false;
@@ -38,10 +42,12 @@ export class TvPlayback {
     this.sync();
   }
 
-  update(song: TvSong | null, status: PlaybackStatus) {
+  update(song: TvSong | null, status: PlaybackStatus, wheelOpen = false) {
     if (this.disposed) return;
     const changed = song?.id !== this.song?.id;
     const statusChanged = status !== this.status;
+    const wheelChanged = wheelOpen !== this.wheelOpen;
+    this.wheelOpen = wheelOpen;
     this.status = status;
     this.song = song;
     if (changed) {
@@ -50,7 +56,7 @@ export class TvPlayback {
       this.finishing = null;
       this.started = false;
       this.callbacks.blocked(false);
-      this.interlude = !!song && this.hasHadSong;
+      this.interlude = !!song && this.hasHadSong && !wheelOpen;
       this.callbacks.interlude(this.interlude);
       if (song) this.hasHadSong = true;
       // Invalidate the previous item before pausing: its late end event is stale.
@@ -62,7 +68,7 @@ export class TvPlayback {
         this.sync();
       }, 10_000);
     }
-    if (changed || statusChanged) this.sync();
+    if (changed || statusChanged || wheelChanged) this.sync();
   }
 
   private sync() {
@@ -74,7 +80,14 @@ export class TvPlayback {
       if (this.status === "playing") this.player.loadVideoById(this.song.videoId);
       else this.player.cueVideoById(this.song.videoId);
     } else if (this.status === "playing") this.player.playVideo();
-    else this.player.pauseVideo();
+    else {
+      // Do not turn an already-ended video into an interrupted song when a
+      // host pause arrives before YouTube's asynchronous ENDED notification.
+      const duration=this.player.getDuration?.()||0;
+      const majorityPlayed=this.wheelOpen&&duration>0&&(this.player.getCurrentTime?.()||0)>duration/2;
+      if(this.started&&(this.player.getPlayerState?.()===0||majorityPlayed))void this.finish(this.song.id);
+      this.player.pauseVideo();
+    }
     if (this.status !== "playing") this.callbacks.blocked(false);
   }
 

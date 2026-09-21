@@ -249,7 +249,7 @@ export default function Home(){
     return()=>{cancelled=true;playback.dispose();if(!ready)player?.destroy();tvPlaybackRef.current=null;playerMountRef.current?.replaceChildren();if(window.onYouTubeIframeAPIReady===build)window.onYouTubeIframeAPIReady=undefined;};
   },[screen,roomCode]);
 
-  useEffect(()=>{tvPlaybackRef.current?.update(room?.nowPlaying||null,room?.playbackStatus||"idle");},[room,screen,roomCode]);
+  useEffect(()=>{tvPlaybackRef.current?.update(room?.nowPlaying||null,room?.playbackStatus||"idle",!!room?.wheel);},[room,screen,roomCode]);
   useEffect(()=>{
     // Preserve one audio context across landing -> TV. Recreating it discarded
     // the activation from the original Open TV button.
@@ -349,7 +349,7 @@ export default function Home(){
       {!canHost&&<div className="requests-closed">Host controls aren’t connected yet. <button onClick={()=>void resumeOrCreateRoom()} disabled={busy}>Enable host controls</button></div>}
       <div className="host-grid"><section className="host-controls"><p className="eyebrow">Playback</p><h1>{room?.nowPlaying?room.nowPlaying.singerName:"Ready when you are"}</h1>{room?.nowPlaying&&<p className="current-song">{room.nowPlaying.songTitle}</p>}<div className="control-row"><button className="play-control" onClick={()=>void control(room?.playbackStatus==="playing"?"pause":"play")} disabled={!canHost||busy||!!room?.wheel||(!room?.nowPlaying&&!room?.queue.length)}>{room?.playbackStatus==="playing"?"Pause":"Play"} <span>{room?.playbackStatus==="playing"?"Ⅱ":"▶"}</span></button><button onClick={()=>void control("skip",room?.nowPlaying?.id)} disabled={!canHost||busy||!!room?.wheel||!room?.nowPlaying}>Skip <span>→</span></button></div>
       <div className="host-wheel-controls"><button className="wheel-open-button" disabled={!canHost||busy||!!room?.wheel||!room?.queue.length} onClick={()=>void setEvent({action:"wheel_open"})}>Wheel <span>✷</span></button>
-      {room?.wheel&&<div className="host-wheel-panel"><strong>{room.wheel.phase==="ready"?"Wheel is on the TV":room.wheel.phase==="spinning"?"Spinning…":`${room.wheel.entries[room.wheel.winnerIndex!]?.name} is up next!`}</strong><div><button disabled={!canHost||busy||room.wheel.phase!=="ready"} onClick={()=>void setEvent({action:"wheel_spin",wheelId:room.wheel?.id})}>Spin ↻</button><button disabled={!canHost||busy||room.wheel.phase==="spinning"} onClick={()=>void setEvent({action:"wheel_close",wheelId:room.wheel?.id})}>Close wheel</button></div><small>Playback pauses while the wheel is open. Each waiting singer gets one chance.</small></div>}</div>
+      {room?.wheel&&<div className="host-wheel-panel"><strong>{room.wheel.phase==="ready"?"Wheel is on the TV":room.wheel.phase==="spinning"?"Spinning…":`${room.wheel.entries[room.wheel.winnerIndex!]?.name} is now singing!`}</strong><div><button disabled={!canHost||busy||room.wheel.phase!=="ready"} onClick={()=>void setEvent({action:"wheel_spin",wheelId:room.wheel?.id})}>Spin ↻</button><button disabled={!canHost||busy||room.wheel.phase==="spinning"} onClick={()=>void setEvent({action:"wheel_close",wheelId:room.wheel?.id})}>{room.wheel.phase==="winner"?"Play winner →":"Close wheel"}</button></div><small>Playback pauses for the wheel. The winner sings now; the interrupted song goes after unless more than half has already played.</small></div>}</div>
       </section><QueuePanel room={room} busy={!canHost||busy||!!room?.wheel} onControl={control} host/><section className="host-night">
       <div className="event-controls">
         <h2>Run the night</h2>

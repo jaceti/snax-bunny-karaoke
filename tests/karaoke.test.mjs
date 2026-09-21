@@ -18,9 +18,38 @@ function setup(t, complete = async () => true) {
   const playback = new TvPlayback({ interlude() {}, blocked(value) { blocked = value; }, error() {}, complete: async id => { completions.push(id); return complete(id); } });
   playback.attach(player);
   t.after(() => playback.dispose());
-  return { playback, calls, completions, blocked: () => blocked };
+  return { playback, player, calls, completions, blocked: () => blocked };
 }
 const songA = { id: 1, videoId: 'first' }, songB = { id: 2, videoId: 'second' };
+
+test('wheel winner is cued silently and plays on close without another interlude',t=>{
+  const {playback,calls}=setup(t);
+  playback.update(songA,'playing');playback.stateChanged(1);
+  playback.update(songA,'paused',true);
+  playback.update(songB,'paused',true);assert.deepEqual(calls.at(-1),['cue','second']);
+  playback.update(songB,'playing',false);assert.deepEqual(calls.at(-1),['play']);
+});
+
+test('opening the wheel retires songs only when more than half has played',async t=>{
+  const {playback,player,completions}=setup(t);
+  player.getDuration=()=>200;let position=99;player.getCurrentTime=()=>position;
+  playback.update(songA,'playing');playback.stateChanged(1);
+  playback.update(songA,'paused',true);assert.deepEqual(completions,[]);
+  playback.update(songA,'paused',false);position=100;
+  playback.update(songA,'paused',true);assert.deepEqual(completions,[]);
+  playback.update(songA,'paused',false);position=101;
+  playback.update(songA,'paused',true);await Promise.resolve();assert.deepEqual(completions,[1]);
+  playback.stateChanged(0);assert.deepEqual(completions,[1]);
+});
+
+test('ordinary pauses preserve a majority-played song; an ended song completes during wheel pause',async t=>{
+  const {playback,player,completions}=setup(t);
+  player.getDuration=()=>200;player.getCurrentTime=()=>190;
+  playback.update(songA,'playing');playback.stateChanged(1);
+  playback.update(songA,'paused');assert.deepEqual(completions,[]);
+  player.getCurrentTime=()=>0;player.getPlayerState=()=>0;
+  playback.update(songA,'paused',true);await Promise.resolve();assert.deepEqual(completions,[1]);
+});
 
 test('three queued songs load in one player without another activation', async t => {
   const { playback, calls, completions } = setup(t);

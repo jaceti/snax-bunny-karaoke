@@ -35,7 +35,7 @@ export function WheelView({wheel,serverNow,onLand}:{wheel:WheelState;serverNow:n
       </svg>
     </div>
     <div className="wheel-copy" aria-live="polite"><p className="eyebrow">Snax picks the next star</p><h2>{won?"TAKE THE MIC!":wheel.phase==="ready"?"WHO’S NEXT?":"ROUND WE GO…"}</h2>
-      {won&&winner?<div className="wheel-winner"><span>★ You’re up next ★</span><strong>{winner.name.toUpperCase()}</strong><p>{winner.songTitle}</p><small>Your first waiting song is now at the top of the lineup.</small></div>:<p>{wheel.phase==="ready"?"The host is about to spin. One singer. One chance. All eyes on the wheel.":"A little bunny luck is coming your way."}</p>}
+      {won&&winner?<div className="wheel-winner"><span>★ Now singing ★</span><strong>{winner.name.toUpperCase()}</strong><p>{winner.songTitle}</p><small>Your song is ready to play when the host closes the wheel.</small></div>:<p>{wheel.phase==="ready"?"The host is about to spin. One singer. One chance. All eyes on the wheel.":"A little bunny luck is coming your way."}</p>}
       {wheel.entries.some(e=>e.filler)&&<small className="wheel-filler-note">Snax’s extra space is just for looks—it never wins.</small>}
     </div>
   </section>;

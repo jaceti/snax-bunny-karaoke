@@ -1,6 +1,6 @@
 import { env } from "cloudflare:workers";
 import { hostTokenMatches } from "../shared-host";
-import { readWheel,openWheel,spinWheel,closeWheel } from "../../../wheel-server";
+import { readWheel,openWheel,spinWheel,closeWheel,finishInterruptedSong } from "../../../wheel-server";
 
 type QueueRow = { id:number; singer_name:string; song_title:string; video_title:string; video_id:string; thumbnail_url:string; sort_order:number; status:"pending"|"playing"|"done"; started_at:string|null; sung_count?:number };
 
@@ -30,13 +30,14 @@ function requestsAreOpen(room:{requests_open:number;ends_at:string|null}) {
 
 async function state(code:string) {
   const db=dbBinding();
+  // Finalize a landed wheel before reading the current singer and lineup.
+  const wheel=await readWheel(db,code);
   const room=await db.prepare("SELECT code, playback_status, requests_open, ends_at, completed_count FROM rooms WHERE code = ?").bind(code).first<{code:string;playback_status:"idle"|"playing"|"paused";requests_open:number;ends_at:string|null;completed_count:number}>();
   if(!room) return null;
-  const [now,waiting,current,wheel]=await Promise.all([
+  const [now,waiting,current]=await Promise.all([
     db.prepare("SELECT q.id,q.singer_name,q.song_title,q.video_title,q.video_id,q.thumbnail_url,q.sort_order,q.status,q.started_at,COALESCE(s.sung_count,0) AS sung_count FROM queue_items q LEFT JOIN singer_stats s ON s.room_code=q.room_code AND s.singer_key=lower(trim(q.singer_name)) WHERE q.room_code=? AND q.status='playing' ORDER BY q.sort_order LIMIT 1").bind(code).first<QueueRow>(),
     db.prepare("SELECT q.id,q.singer_name,q.song_title,q.video_title,q.video_id,q.thumbnail_url,q.sort_order,q.status,q.started_at,COALESCE(s.sung_count,0) AS sung_count FROM queue_items q LEFT JOIN singer_stats s ON s.room_code=q.room_code AND s.singer_key=lower(trim(q.singer_name)) WHERE q.room_code=? AND q.status='pending' ORDER BY q.sort_order LIMIT 100").bind(code).all<QueueRow>(),
     db.prepare("SELECT code FROM current_room WHERE id=1").first<{code:string}>().catch(()=>null),
-    readWheel(db,code),
   ]);
   return { code, playbackStatus:room.playback_status, requestsOpen:requestsAreOpen(room), requestsToggle:!!room.requests_open, endsAt:room.ends_at, cutoffMinutes:CUTOFF_MINUTES, isCurrent:current?.code===code, nowPlaying:now?queueItem(now):null, queue:waiting.results.map(queueItem), completedCount:Number(room.completed_count||0),wheel,serverNow:Date.now() };
 }
@@ -77,6 +78,7 @@ export async function PATCH(request:Request, context:{params:Promise<{code:strin
         return Response.json(await state(code));
       }catch(error){return Response.json({error:error instanceof Error?error.message:"The wheel missed its cue."},{status:409});}
     }
+    if(action==="complete"&&(isHost||isTv)&&itemId&&await finishInterruptedSong(dbBinding(),code,itemId))return Response.json(await state(code));
     if(await readWheel(dbBinding(),code)){
       if(action==="complete")return Response.json(await state(code));
       if(!["set_requests","set_end_time"].includes(action))return Response.json({error:"Close the wheel before changing playback or the lineup."},{status:409});

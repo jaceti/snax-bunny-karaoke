@@ -2,14 +2,14 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
 import { wheelEntries,pickWheelWinner,wheelRotation,WHEEL_DURATION } from '../app/wheel-model.ts';
-import { openWheel,spinWheel,closeWheel,readWheel } from '../app/wheel-server.ts';
+import { openWheel,spinWheel,closeWheel,readWheel,finishInterruptedSong } from '../app/wheel-server.ts';
 import { ensureDailyReset } from '../app/daily-reset.ts';
 
 function fixture(status='playing'){
   const sql=new DatabaseSync(':memory:');
   sql.exec(`CREATE TABLE rooms(code TEXT PRIMARY KEY,playback_status TEXT,requests_open INTEGER,ends_at TEXT,completed_count INTEGER);
     CREATE TABLE queue_items(id INTEGER PRIMARY KEY,room_code TEXT,status TEXT,sort_order INTEGER,singer_name TEXT,song_title TEXT);
-    CREATE TABLE singer_stats(room_code TEXT,singer_key TEXT,sung_count INTEGER);
+    CREATE TABLE singer_stats(room_code TEXT,singer_key TEXT,sung_count INTEGER,last_sung_at TEXT,PRIMARY KEY(room_code,singer_key));
     CREATE TABLE current_room(id INTEGER PRIMARY KEY,code TEXT);
     INSERT INTO rooms VALUES('ROOM','${status}',1,NULL,0),('OTHER','idle',1,NULL,0);
     INSERT INTO current_room VALUES(1,'ROOM');
@@ -18,6 +18,7 @@ function fixture(status='playing'){
     prepare(query){return {query,values:[],bind(...values){this.values=values;return this;},async run(){const r=sql.prepare(query).run(...this.values);return {meta:{changes:Number(r.changes)}};},async first(){return sql.prepare(query).get(...this.values)||null;},async all(){return {results:sql.prepare(query).all(...this.values)};}};},
     async batch(statements){sql.exec('BEGIN');try{const results=[];for(const s of statements)results.push(await s.run());sql.exec('COMMIT');return results;}catch(e){sql.exec('ROLLBACK');throw e;}},
   };
+  sql.exec('ALTER TABLE queue_items ADD COLUMN started_at TEXT');
   return {sql,db};
 }
 
@@ -38,14 +39,14 @@ test('winner sampling is uniform over singers and rejects modulo-biased random v
   for(let i=0;i<4;i++)assert.equal(Math.round((wheelRotation(i,4)+(i+.5)*90)%360),0);
 });
 
-test('spin promotes only the winner’s earliest queued song, retains current singer, and resumes on close',async()=>{
+test('landing makes the winner current and the interrupted singer next; closing plays the winner',async()=>{
   const {sql,db}=fixture();await openWheel(db,'ROOM');
   const ready=await readWheel(db,'ROOM');assert.equal(ready.phase,'ready');assert.equal(ready.entries.length,4);
   assert.equal(sql.prepare("SELECT playback_status FROM rooms WHERE code='ROOM'").get().playback_status,'paused');
   const time=Date.now();await spinWheel(db,'ROOM',ready.id,time);
   const spinning=await readWheel(db,'ROOM',time);const winner=spinning.entries[spinning.winnerIndex];
   assert.equal(winner.filler,false);assert.equal(spinning.phase,'spinning');
-  assert.equal(sql.prepare("SELECT id FROM queue_items WHERE room_code='ROOM' AND status='pending' ORDER BY sort_order,id LIMIT 1").get().id,winner.queueId);
+  assert.equal(sql.prepare("SELECT id FROM queue_items WHERE room_code='ROOM' AND status='pending' ORDER BY sort_order,id LIMIT 1").get().id,2);
   assert.notEqual(winner.queueId,5);assert.equal(sql.prepare("SELECT id FROM queue_items WHERE status='playing'").get().id,1);
   await assert.rejects(closeWheel(db,'ROOM',ready.id,time+1),/finish/);
   const before=JSON.stringify(sql.prepare('SELECT * FROM queue_items ORDER BY id').all());
@@ -53,6 +54,11 @@ test('spin promotes only the winner’s earliest queued song, retains current si
   assert.equal((await readWheel(db,'ROOM',time)).winnerIndex,spinning.winnerIndex);
   assert.equal(JSON.stringify(sql.prepare('SELECT * FROM queue_items ORDER BY id').all()),before);
   assert.equal((await readWheel(db,'ROOM',time+WHEEL_DURATION)).phase,'winner');
+  assert.equal(sql.prepare("SELECT id FROM queue_items WHERE status='playing'").get().id,winner.queueId);
+  assert.equal(sql.prepare("SELECT id FROM queue_items WHERE room_code='ROOM' AND status='pending' ORDER BY sort_order,id LIMIT 1").get().id,1);
+  const landed=JSON.stringify(sql.prepare('SELECT * FROM queue_items ORDER BY id').all());
+  await readWheel(db,'ROOM',time+WHEEL_DURATION+1);
+  assert.equal(JSON.stringify(sql.prepare('SELECT * FROM queue_items ORDER BY id').all()),landed);
   await closeWheel(db,'ROOM',ready.id,time+WHEEL_DURATION);
   assert.equal(await readWheel(db,'ROOM'),null);assert.equal(sql.prepare("SELECT playback_status FROM rooms WHERE code='ROOM'").get().playback_status,'playing');
   assert.equal(sql.prepare("SELECT sort_order FROM queue_items WHERE room_code='OTHER'").get().sort_order,1);
@@ -69,7 +75,7 @@ test('closing an unspun wheel preserves the queue and an existing host pause',as
 
 test('new requests before spin are included, and the 3 AM reset closes an active wheel',async()=>{
   const {sql,db}=fixture();await openWheel(db,'ROOM');const wheel=await readWheel(db,'ROOM');
-  sql.exec("INSERT INTO queue_items VALUES(7,'ROOM','pending',5,'New singer','New song')");
+  sql.exec("INSERT INTO queue_items VALUES(7,'ROOM','pending',5,'New singer','New song',NULL)");
   await spinWheel(db,'ROOM',wheel.id,Date.now());
   const spun=await readWheel(db,'ROOM');assert.equal(spun.entries.length,4);assert.equal(spun.entries.some(e=>e.filler),false);assert.equal(spun.entries.some(e=>e.name==='New singer'),true);
   await ensureDailyReset(db,Date.parse('2026-09-21T10:00:00Z'));
@@ -79,7 +85,37 @@ test('new requests before spin are included, and the 3 AM reset closes an active
 test('empty queues cannot open the wheel; a single singer wins without landing on filler',async()=>{
   const {sql,db}=fixture();sql.exec("DELETE FROM queue_items WHERE room_code='ROOM' AND status='pending'");
   await assert.rejects(openWheel(db,'ROOM'),/at least one/);
-  sql.exec("INSERT INTO queue_items VALUES(2,'ROOM','pending',1,'Solo','Only song')");
+  sql.exec("INSERT INTO queue_items VALUES(2,'ROOM','pending',1,'Solo','Only song',NULL)");
   await openWheel(db,'ROOM');const wheel=await readWheel(db,'ROOM');await spinWheel(db,'ROOM',wheel.id);
   const spun=await readWheel(db,'ROOM');assert.equal(spun.entries.length,2);assert.equal(spun.entries[spun.winnerIndex].name,'Solo');sql.close();
+});
+
+test('a finished or majority-played interrupted song is counted once and never requeued',async()=>{
+  for(const late of [false,true]){
+    const {sql,db}=fixture();await openWheel(db,'ROOM');const wheel=await readWheel(db,'ROOM');
+    const time=Date.now();await spinWheel(db,'ROOM',wheel.id,time);
+    if(late)await readWheel(db,'ROOM',time+WHEEL_DURATION);
+    assert.equal(await finishInterruptedSong(db,'ROOM',1),true);
+    await finishInterruptedSong(db,'ROOM',1);
+    const landed=await readWheel(db,'ROOM',time+WHEEL_DURATION);
+    const winner=landed.entries[landed.winnerIndex];
+    assert.equal(sql.prepare('SELECT id FROM queue_items WHERE id=1').get(),undefined);
+    assert.equal(sql.prepare("SELECT completed_count FROM rooms WHERE code='ROOM'").get().completed_count,1);
+    assert.equal(sql.prepare("SELECT sung_count FROM singer_stats WHERE room_code='ROOM'").get().sung_count,1);
+    assert.equal(sql.prepare("SELECT id FROM queue_items WHERE status='playing'").get().id,winner.queueId);
+    await finishInterruptedSong(db,'ROOM',winner.queueId);
+    assert.equal(sql.prepare("SELECT id FROM queue_items WHERE status='playing'").get().id,winner.queueId);
+    await closeWheel(db,'ROOM',wheel.id,time+WHEEL_DURATION);sql.close();
+  }
+});
+
+test('close can finalize landing without a prior poll, including an idle or paused room',async()=>{
+  for(const status of ['paused','idle']){
+    const {sql,db}=fixture(status);if(status==='idle')sql.exec('DELETE FROM queue_items WHERE id=1');
+    await openWheel(db,'ROOM');const wheel=await readWheel(db,'ROOM');const time=Date.now();
+    await spinWheel(db,'ROOM',wheel.id,time);const spun=await readWheel(db,'ROOM',time);
+    await closeWheel(db,'ROOM',wheel.id,time+WHEEL_DURATION);
+    assert.equal(sql.prepare("SELECT id FROM queue_items WHERE status='playing'").get().id,spun.entries[spun.winnerIndex].queueId);
+    assert.equal(sql.prepare("SELECT playback_status FROM rooms WHERE code='ROOM'").get().playback_status,'playing');sql.close();
+  }
 });
