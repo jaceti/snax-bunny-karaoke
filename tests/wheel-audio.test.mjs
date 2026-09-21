@@ -60,7 +60,7 @@ test('reopening a finished result is silent and closing cancels a pending reveal
 });
 test('the combined recording replaces browser speech and follows the cymbal once',async t=>{
   const {spoken,sources,restore}=audioFixture(t);const audio=new WheelAudio(()=>{});t.after(()=>{audio.dispose();restore();});
-  t.mock.method(globalThis,'fetch',async url=>{assert.match(url,/^\/snax-wheel-(wow|drumroll)\.mp3$/);return {ok:true,arrayBuffer:async()=>new Uint8Array([url.includes('wow')?1:2]).buffer};});
+  t.mock.method(globalThis,'fetch',async url=>{assert.match(url,/^\/snax-wheel-(wow|drumroll-v2)\.mp3$/);return {ok:true,arrayBuffer:async()=>new Uint8Array([url.includes('wow')?1:2]).buffer};});
   await audio.unlock();for(let i=0;i<6;i++)await Promise.resolve();audio.sync(wheel,1000);
   assert.equal(sources.length,1);assert.equal(sources[0].buffer.recordedDrum,true);t.mock.timers.tick(7000);
   assert.equal(sources.length,2);assert.equal(sources[1].buffer.recordedWow,undefined);

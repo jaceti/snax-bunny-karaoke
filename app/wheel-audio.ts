@@ -72,7 +72,7 @@ export class WheelAudio {
     if(!this.loadingWow)this.loadingWow=(async()=>{
       try{
         await Promise.all(["wow","drumroll"].map(async kind=>{
-          const response=await fetch(`/snax-wheel-${kind}.mp3`);
+          const response=await fetch(kind==="drumroll"?"/snax-wheel-drumroll-v2.mp3":"/snax-wheel-wow.mp3");
           if(!response.ok||this.disposed)return;
           const bytes=await response.arrayBuffer();
           if(!this.context||this.disposed)return;
