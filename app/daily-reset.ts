@@ -1,4 +1,5 @@
 import { singerNight } from "./singer-memory.ts";
+import { ensureWheelSchema } from "./wheel-server.ts";
 
 // Preserve the current show on installation; first reset: September 21, 3 AM Pacific.
 export const RESET_ACTIVATION_NIGHT="2026-09-20";
@@ -11,6 +12,7 @@ export async function ensureDailyReset(db:D1Database,now=Date.now()){
   let ready=initialized.get(db);
   if(!ready){
     ready=(async()=>{
+      await ensureWheelSchema(db);
       await db.prepare("CREATE TABLE IF NOT EXISTS daily_reset (id INTEGER PRIMARY KEY CHECK (id=1), night TEXT NOT NULL, reset_at TEXT)").run();
       await db.prepare("INSERT OR IGNORE INTO daily_reset (id,night) VALUES (1,?)").bind(RESET_ACTIVATION_NIGHT).run();
     })();
@@ -28,8 +30,9 @@ export async function ensureDailyReset(db:D1Database,now=Date.now()){
     db.prepare(`DELETE FROM queue_items WHERE room_code=${current} AND ${due}`).bind(night),
     db.prepare(`DELETE FROM singer_stats WHERE room_code=${current} AND ${due}`).bind(night),
     db.prepare(`UPDATE rooms SET playback_status='idle',requests_open=1,ends_at=NULL,completed_count=0 WHERE code=${current} AND ${due}`).bind(night),
+    db.prepare(`DELETE FROM room_wheel WHERE room_code=${current} AND ${due}`).bind(night),
     db.prepare("UPDATE daily_reset SET night=?,reset_at=? WHERE id=1 AND night < ?").bind(night,new Date(now).toISOString(),night),
   ]);
   checkedNight.set(db,night);
-  return Number(results[3]?.meta?.changes||0)>0;
+  return Number(results[4]?.meta?.changes||0)>0;
 }

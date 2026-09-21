@@ -60,3 +60,9 @@ export const dailyReset = sqliteTable("daily_reset", {
   night: text("night").notNull(),
   resetAt: text("reset_at"),
 });
+
+export const roomWheel = sqliteTable("room_wheel", {
+  roomCode: text("room_code").primaryKey(),
+  state: text("state").notNull(),
+  resumePlayback: integer("resume_playback").notNull().default(0),
+});
