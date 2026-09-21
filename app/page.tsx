@@ -3,7 +3,7 @@
 import { FormEvent, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { QRCodeSVG } from "qrcode.react";
 import { TvPlayback, type TvPlayer } from "./tv-playback";
-import { acceptHostInvite, hostShareLink } from "./host-access";
+import { acceptHostInvite, hostShareLink, joinSharedHost } from "./host-access";
 
 type Song={videoId:string;title:string;channel:string;thumbnail:string};
 type QueueItem={id:number;singerName:string;songTitle:string;videoTitle:string;videoId:string;thumbnailUrl:string;sortOrder:number;status:"pending"|"playing"|"done";startedAt:string|null;sungCount?:number};
@@ -92,7 +92,8 @@ export default function Home(){
           try{await acceptHostInvite(code,hostKey,localStorage);}
           finally{history.replaceState({},"",`?host=${code}`);setBusy(false);}
         }
-        await openHostRoom(code);
+        if(!hostKey&&!localStorage.getItem(`snax-host-${code}`))await resumeOrCreateRoom(code);
+        else await openHostRoom(code);
       })().catch(error=>setNotice(messageOf(error)));
     }else if(params.get("tv")&&code&&television.length>30){
       codeRef.current=code;tvRef.current=television;inviteRef.current=invite;setRoomCode(code);setTvToken(television);setInviteToken(invite);setScreen("tv");void fetchRoom(code,false,"tv");
@@ -168,13 +169,11 @@ export default function Home(){
     await fetchRoom(code,false,"host");
   }
 
-  async function resumeOrCreateRoom(){
+  async function resumeOrCreateRoom(expectedCode?:string){
     setBusy(true);setNotice("");
     try{
-      const response=await fetch("/api/rooms/current",{cache:"no-store"});
-      if(response.status===404){await createRoom();return;}
-      const data=await response.json() as {code?:string;inviteToken?:string;tvToken?:string|null;error?:string};
-      if(!response.ok||!data.code)throw new Error(data.error||"Couldn’t reconnect to tonight’s room. Please try again.");
+      const data=await joinSharedHost(localStorage,expectedCode);
+      if(!data){await createRoom();return;}
       await openHostRoom(data.code,data);
     }catch(error){setNotice(messageOf(error));}finally{setBusy(false);}
   }
@@ -239,8 +238,8 @@ export default function Home(){
 
   function home(){history.replaceState({},"","/");setScreen("landing");setRoom(null);setNotice("");}
   async function copyHostLink(){
-    try{await navigator.clipboard.writeText(hostShareUrl);setNotice("Private host link copied. Share only with people who should control the show.");}
-    catch{setNotice("Couldn’t copy the link. Have your co-host scan the private host QR instead.");}
+    try{await navigator.clipboard.writeText(hostShareUrl);setNotice("Host link copied. Anyone who opens it can control this room.");}
+    catch{setNotice("Couldn’t copy the link. Scan the host QR on the Snax page instead.");}
   }
 
   return <main className={`snax-shell view-${screen}`}>
@@ -250,7 +249,7 @@ export default function Home(){
 
     {screen==="landing"&&<>
       <section className="hero"><div className="hero-copy"><p className="eyebrow">Live from the bunny lounge</p><h1>Take the mic.<br/><em>Make it a magic moment.</em></h1></div><SnaxPortrait/></section>
-      <section className="role-grid"><article className="role-card host-card"><span className="role-number">01</span><div><p className="card-kicker">Running the room?</p><h2>Host console</h2><p>Start a private room, manage the lineup, and keep the night moving.</p></div><label className="consent-check"><input type="checkbox" checked={consent} onChange={event=>acceptConsent(event.target.checked)}/><span>I agree to the <a href="/privacy">Privacy Policy</a>, <a href="/terms">Terms</a>, and <a href="https://www.youtube.com/t/terms" target="_blank" rel="noreferrer">YouTube Terms</a>.</span></label><button type="button" onClick={resumeOrCreateRoom} disabled={busy||!consent}>Open host console <span>→</span></button></article><article className="role-card singer-card"><span className="role-number">02</span><div><p className="card-kicker">Ready to sing?</p><h2>Singer view</h2><p>Scan the TV code, pick your name, and search YouTube karaoke tracks.</p></div><div className="scan-note"><span className="mini-qr">▦</span> Join by scanning the room QR</div></article><article className="role-card tv-card"><span className="role-number">03</span><div><p className="card-kicker">On the big screen</p><h2>TV display</h2><p>Lyrics, now singing, who’s next, and a QR code that stays visible.</p></div><div className="tv-preview"><span>NOW SINGING</span><strong>SNAX</strong><i>♪</i></div></article></section>
+      <section className="role-grid"><article className="role-card host-card"><span className="role-number">01</span><div><p className="card-kicker">Running the room?</p><h2>Host console</h2><p>Join tonight’s room as a host, manage the lineup, and keep the night moving.</p></div><label className="consent-check"><input type="checkbox" checked={consent} onChange={event=>acceptConsent(event.target.checked)}/><span>I agree to the <a href="/privacy">Privacy Policy</a>, <a href="/terms">Terms</a>, and <a href="https://www.youtube.com/t/terms" target="_blank" rel="noreferrer">YouTube Terms</a>.</span></label><button type="button" onClick={()=>void resumeOrCreateRoom()} disabled={busy||!consent}>Open host console <span>→</span></button></article><article className="role-card singer-card"><span className="role-number">02</span><div><p className="card-kicker">Ready to sing?</p><h2>Singer view</h2><p>Scan the TV code, pick your name, and search YouTube karaoke tracks.</p></div><div className="scan-note"><span className="mini-qr">▦</span> Join by scanning the room QR</div></article><article className="role-card tv-card"><span className="role-number">03</span><div><p className="card-kicker">On the big screen</p><h2>TV display</h2><p>Lyrics, now singing, who’s next, and a QR code that stays visible.</p></div><div className="tv-preview"><span>NOW SINGING</span><strong>SNAX</strong><i>♪</i></div></article></section>
       <Footer/>
     </>}
 
@@ -259,8 +258,8 @@ export default function Home(){
     {screen==="singer"&&<section className="singer-stage"><header className="app-header"><button className="wordmark" onClick={home}>SNAX</button><span>Room <strong>{roomCode}</strong></span><span className="singer-chip">{singerName}</span></header><div className="singer-grid"><div className="search-panel"><p className="eyebrow">You’re in, {singerName}</p><h1>Pick your song</h1>{room&&!room.requestsOpen&&<p className="requests-closed">Requests are closed for tonight. The bunny is tired.</p>}{(!room||room.requestsOpen)&&<><form className="song-search" onSubmit={search}><label htmlFor="song">Search a song or artist</label><div><input id="song" value={query} onChange={event=>setQuery(event.target.value)} placeholder="Robyn, Chappell Roan, ABBA…"/><button disabled={searching}>{searching?"Searching…":"Find karaoke"}</button></div><small>Karaoke with lyrics first, with HD versions preferred.</small></form><div className="results">{results.slice(0,shown).map(song=><article key={song.videoId}><img src={song.thumbnail} alt=""/><div><strong><a href={`https://www.youtube.com/watch?v=${song.videoId}`} target="_blank" rel="noreferrer" title="Open on YouTube">{song.title}</a></strong><small>{song.channel}</small><button onClick={()=>void addSong(song)} disabled={busy}>Add to lineup +</button></div></article>)}</div>{results.length>shown&&<button type="button" className="load-more" onClick={()=>setShown(count=>count+PAGE_SIZE)}>Show more ({results.length-shown} left) ↓</button>}{results.length>0&&results.length<=shown&&<p className="results-end">That’s every match for this search. Try adding the artist or a word from the title for more.</p>}</>}</div><QueuePanel room={room} busy={busy} onControl={control}/></div></section>}
 
     {screen==="host"&&<section className="host-stage"><header className="app-header"><button className="wordmark" onClick={home}>SNAX</button><div className="host-room">Host console · Room <strong>{roomCode}</strong></div></header>
-      {room?.isCurrent===false&&<div className="requests-closed">This is an older room. The TV and singer QR may be using tonight’s room. <button onClick={resumeOrCreateRoom} disabled={busy}>Connect to tonight’s room</button></div>}
-      {!canHost&&<div className="requests-closed">Viewing only. Ask a host to share the private “Scan to host” QR from their host console to enable your controls.</div>}
+      {room?.isCurrent===false&&<div className="requests-closed">This is an older room. The TV and singer QR may be using tonight’s room. <button onClick={()=>void resumeOrCreateRoom()} disabled={busy}>Connect to tonight’s room</button></div>}
+      {!canHost&&<div className="requests-closed">Host controls aren’t connected yet. <button onClick={()=>void resumeOrCreateRoom()} disabled={busy}>Enable host controls</button></div>}
       <div className="host-grid"><section className="host-controls"><p className="eyebrow">Playback</p><h1>{room?.nowPlaying?room.nowPlaying.singerName:"Ready when you are"}</h1>{room?.nowPlaying&&<p className="current-song">{room.nowPlaying.songTitle}</p>}<div className="control-row"><button className="play-control" onClick={()=>void control(room?.playbackStatus==="playing"?"pause":"play")} disabled={!canHost||busy||(!room?.nowPlaying&&!room?.queue.length)}>{room?.playbackStatus==="playing"?"Pause":"Play"} <span>{room?.playbackStatus==="playing"?"Ⅱ":"▶"}</span></button><button onClick={()=>void control("skip",room?.nowPlaying?.id)} disabled={!canHost||busy||!room?.nowPlaying}>Skip <span>→</span></button></div>
       </section><QueuePanel room={room} busy={!canHost||busy} onControl={control} host/><section className="host-night">
       <div className="event-controls">
@@ -279,9 +278,9 @@ export default function Home(){
         </div>
         <p className="event-note">Balance puts first-timers ahead and spaces out repeat singers, so nobody sings twice before everyone waiting has had a turn.</p>
       </div>
-      {canHost&&hostShareUrl&&<section className="host-share" aria-label="Private host invitation">
-        <div><p className="eyebrow">Private · Hosts only</p><h2>Scan to host</h2><p>Anyone who scans this can control this room’s playback and lineup. Keep it off the public TV.</p><button type="button" onClick={()=>void copyHostLink()}>Copy private host link</button><small>Room {roomCode} · Same code for this room</small></div>
-        <QRCodeSVG value={hostShareUrl} size={220} level="M" marginSize={4} bgColor="#ffffff" fgColor="#000000" title="Private QR: scan to control this karaoke room"/>
+      {canHost&&hostShareUrl&&<section className="host-share" aria-label="Share host controls">
+        <div><p className="eyebrow">Share host controls</p><h2>Scan to host</h2><p>Anyone who scans this can control this room’s playback and lineup. Keep it off the public TV.</p><button type="button" onClick={()=>void copyHostLink()}>Copy host link</button><small>Room {roomCode} · Same code for this room</small></div>
+        <QRCodeSVG value={hostShareUrl} size={220} level="M" marginSize={4} bgColor="#ffffff" fgColor="#000000" title="Scan to control this karaoke room"/>
       </section>}
       </section></div></section>}
 

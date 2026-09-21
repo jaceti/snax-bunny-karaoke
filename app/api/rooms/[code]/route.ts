@@ -1,4 +1,5 @@
 import { env } from "cloudflare:workers";
+import { hostTokenMatches } from "../shared-host";
 
 type QueueRow = { id:number; singer_name:string; song_title:string; video_title:string; video_id:string; thumbnail_url:string; sort_order:number; status:"pending"|"playing"|"done"; started_at:string|null; sung_count?:number };
 
@@ -12,7 +13,7 @@ async function verify(code:string, request:Request, kind:"host"|"invite"|"tv") {
   const column = kind === "host" ? "host_token_hash" : kind === "invite" ? "invite_token_hash" : "tv_token_hash";
   const token=request.headers.get(header)||""; if(!token) return false;
   const room=await dbBinding().prepare(`SELECT ${column} AS token_hash FROM rooms WHERE code = ?`).bind(code).first<{token_hash:string}>();
-  return !!room && room.token_hash === await hash(token);
+  return !!room && (kind==="host"?await hostTokenMatches(code,room.token_hash,token):room.token_hash === await hash(token));
 }
 
 // Requests close this many minutes before the room's end time. Rabbit Box runs a
