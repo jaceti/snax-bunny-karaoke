@@ -3,6 +3,7 @@
 import { FormEvent, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { QRCodeSVG } from "qrcode.react";
 import { TvPlayback, type TvPlayer } from "./tv-playback";
+import { acceptHostInvite, hostShareLink } from "./host-access";
 
 type Song={videoId:string;title:string;channel:string;thumbnail:string};
 type QueueItem={id:number;singerName:string;songTitle:string;videoTitle:string;videoId:string;thumbnailUrl:string;sortOrder:number;status:"pending"|"playing"|"done";startedAt:string|null;sungCount?:number};
@@ -23,6 +24,7 @@ export default function Home(){
   const [singerName,setSingerName]=useState("");
   const [room,setRoom]=useState<RoomState|null>(null);
   const [canHost,setCanHost]=useState(false);
+  const [hostShareUrl,setHostShareUrl]=useState("");
   const [query,setQuery]=useState("");
   const [results,setResults]=useState<Song[]>([]);
   const [searching,setSearching]=useState(false);
@@ -64,6 +66,10 @@ export default function Home(){
       const data=await response.json() as RoomState&{error?:string};
       if(!response.ok) throw new Error(data.error||"That room has left the building.");
       if(codeRef.current!==cleanCode(code))return null;
+      if((mode||screenRef.current)==="host"){
+        const token=localStorage.getItem(`snax-host-${cleanCode(code)}`)||"";
+        setCanHost(!!token);setHostShareUrl(hostShareLink(window.location.origin,cleanCode(code),token));
+      }
       setRoom(data); setOffline(false); if(!quiet)setNotice(""); return data;
     }catch(error){
       // A dropped poll on venue wifi must not blank the room. Keep showing the
@@ -80,8 +86,14 @@ export default function Home(){
     const invite=params.get("invite")||""; const television=params.get("screen")||"";
     if(params.get("host")&&code){
       const hostKey=new URLSearchParams(window.location.hash.slice(1)).get("hostKey");
-      if(hostKey){ localStorage.setItem(`snax-host-${code}`,hostKey); history.replaceState({},"",`?host=${code}`); }
-      void openHostRoom(code).catch(error=>setNotice(messageOf(error)));
+      void (async()=>{
+        if(hostKey){
+          setBusy(true);
+          try{await acceptHostInvite(code,hostKey,localStorage);}
+          finally{history.replaceState({},"",`?host=${code}`);setBusy(false);}
+        }
+        await openHostRoom(code);
+      })().catch(error=>setNotice(messageOf(error)));
     }else if(params.get("tv")&&code&&television.length>30){
       codeRef.current=code;tvRef.current=television;inviteRef.current=invite;setRoomCode(code);setTvToken(television);setInviteToken(invite);setScreen("tv");void fetchRoom(code,false,"tv");
     }else if(params.get("room")&&code&&invite.length>30){
@@ -150,7 +162,7 @@ export default function Home(){
       const response=await fetch("/api/rooms/current",{cache:"no-store"});
       if(response.ok){const live=await response.json() as {code:string;inviteToken?:string;tvToken?:string};if(live.code===code){inviteRef.current=live.inviteToken||"";tvRef.current=live.tvToken||"";}}
     }
-    setCanHost(!!localStorage.getItem(`snax-host-${code}`));
+    setCanHost(false);setHostShareUrl("");
     setRoom(null);setRoomCode(code);setInviteToken(inviteRef.current);setTvToken(tvRef.current);
     screenRef.current="host";setScreen("host");history.replaceState({},"",`?host=${code}`);
     await fetchRoom(code,false,"host");
@@ -226,6 +238,10 @@ export default function Home(){
   useEffect(()=>{tvPlaybackRef.current?.update(room?.nowPlaying||null,room?.playbackStatus||"idle");},[room,screen,roomCode]);
 
   function home(){history.replaceState({},"","/");setScreen("landing");setRoom(null);setNotice("");}
+  async function copyHostLink(){
+    try{await navigator.clipboard.writeText(hostShareUrl);setNotice("Private host link copied. Share only with people who should control the show.");}
+    catch{setNotice("Couldn’t copy the link. Have your co-host scan the private host QR instead.");}
+  }
 
   return <main className={`snax-shell view-${screen}`}>
     {screen!=="tv"&&<div className="marquee" aria-hidden="true"><span>SNAX THE BUNNY</span><i>★</i><span>KARAOKE NIGHT</span><i>★</i><span>SNAX THE BUNNY</span></div>}
@@ -244,7 +260,7 @@ export default function Home(){
 
     {screen==="host"&&<section className="host-stage"><header className="app-header"><button className="wordmark" onClick={home}>SNAX</button><div className="host-room">Host console · Room <strong>{roomCode}</strong></div></header>
       {room?.isCurrent===false&&<div className="requests-closed">This is an older room. The TV and singer QR may be using tonight’s room. <button onClick={resumeOrCreateRoom} disabled={busy}>Connect to tonight’s room</button></div>}
-      {!canHost&&<div className="requests-closed">Viewing only. Use the device that started this room to access host controls.</div>}
+      {!canHost&&<div className="requests-closed">Viewing only. Ask a host to share the private “Scan to host” QR from their host console to enable your controls.</div>}
       <div className="host-grid"><section className="host-controls"><p className="eyebrow">Playback</p><h1>{room?.nowPlaying?room.nowPlaying.singerName:"Ready when you are"}</h1>{room?.nowPlaying&&<p className="current-song">{room.nowPlaying.songTitle}</p>}<div className="control-row"><button className="play-control" onClick={()=>void control(room?.playbackStatus==="playing"?"pause":"play")} disabled={!canHost||busy||(!room?.nowPlaying&&!room?.queue.length)}>{room?.playbackStatus==="playing"?"Pause":"Play"} <span>{room?.playbackStatus==="playing"?"Ⅱ":"▶"}</span></button><button onClick={()=>void control("skip",room?.nowPlaying?.id)} disabled={!canHost||busy||!room?.nowPlaying}>Skip <span>→</span></button></div>
       </section><QueuePanel room={room} busy={!canHost||busy} onControl={control} host/><section className="host-night">
       <div className="event-controls">
@@ -262,7 +278,12 @@ export default function Home(){
           <button type="button" disabled={!canHost||busy||!room?.queue.length} onClick={()=>{const count=room?.queue.length||0;if(window.confirm(`Clear all ${count} waiting ${count===1?"song":"songs"}? This cannot be undone. Any song currently playing will continue.`))void setEvent({action:"clear_queue"});}}>Clear queue</button>
         </div>
         <p className="event-note">Balance puts first-timers ahead and spaces out repeat singers, so nobody sings twice before everyone waiting has had a turn.</p>
-      </div></section></div></section>}
+      </div>
+      {canHost&&hostShareUrl&&<section className="host-share" aria-label="Private host invitation">
+        <div><p className="eyebrow">Private · Hosts only</p><h2>Scan to host</h2><p>Anyone who scans this can control this room’s playback and lineup. Keep it off the public TV.</p><button type="button" onClick={()=>void copyHostLink()}>Copy private host link</button><small>Room {roomCode} · Same code for this room</small></div>
+        <QRCodeSVG value={hostShareUrl} size={220} level="M" marginSize={4} bgColor="#ffffff" fgColor="#000000" title="Private QR: scan to control this karaoke room"/>
+      </section>}
+      </section></div></section>}
 
     {screen==="tv"&&<section className="tv-stage-full">
       <header className="tv-top">
