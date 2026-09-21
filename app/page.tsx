@@ -240,7 +240,7 @@ export default function Home(){
     const build=()=>{
       if(cancelled||player||!window.YT?.Player||!playerMountRef.current)return;
       const target=document.createElement("div");target.id="snax-tv-player";playerMountRef.current.appendChild(target);
-      player=new window.YT.Player(target.id,{height:"100%",width:"100%",playerVars:{autoplay:0,controls:1,rel:0,playsinline:1},events:{onReady:event=>{if(!cancelled){ready=true;playback.attach(event.target);}},onAutoplayBlocked:()=>playback.autoplayBlocked(),onStateChange:event=>playback.stateChanged(event.data),onError:()=>playback.playerError()}});
+      player=new window.YT.Player(target.id,{height:"100%",width:"100%",playerVars:{autoplay:0,controls:1,rel:0,playsinline:1},events:{onReady:event=>{if(!cancelled){ready=true;playback.attach(event.target);}},onAutoplayBlocked:()=>playback.autoplayBlocked(),onStateChange:event=>{playback.stateChanged(event.data);if(event.data===1)void wheelAudioRef.current?.unlock();},onError:()=>playback.playerError()}});
     };
     if(window.YT?.Player)build();else{window.onYouTubeIframeAPIReady=build;if(!document.querySelector('script[src="https://www.youtube.com/iframe_api"]')){const script=document.createElement("script");script.src="https://www.youtube.com/iframe_api";document.head.appendChild(script);}}
     return()=>{cancelled=true;playback.dispose();if(!ready)player?.destroy();tvPlaybackRef.current=null;playerMountRef.current?.replaceChildren();if(window.onYouTubeIframeAPIReady===build)window.onYouTubeIframeAPIReady=undefined;};
@@ -250,8 +250,12 @@ export default function Home(){
   useEffect(()=>{
     if(screen!=="tv")return;
     const audio=new WheelAudio(setWheelSoundEnabled);wheelAudioRef.current=audio;
-    const enable=()=>void audio.unlock();document.addEventListener("pointerdown",enable);enable();
-    return()=>{document.removeEventListener("pointerdown",enable);audio.dispose();wheelAudioRef.current=null;};
+    const enable=()=>void audio.unlock();
+    const gestures=["pointerdown","click","touchend","keydown"] as const;
+    for(const gesture of gestures)document.addEventListener(gesture,enable,{capture:true,passive:true});
+    const wake=()=>{if(document.visibilityState==="visible")enable();};
+    document.addEventListener("visibilitychange",wake);window.addEventListener("pageshow",enable);enable();
+    return()=>{for(const gesture of gestures)document.removeEventListener(gesture,enable,true);document.removeEventListener("visibilitychange",wake);window.removeEventListener("pageshow",enable);audio.dispose();wheelAudioRef.current=null;};
   },[screen]);
   useEffect(()=>{wheelAudioRef.current?.sync(room?.wheel||null,room?.serverNow||Date.now());},[room,screen]);
 
@@ -382,8 +386,7 @@ export default function Home(){
           </div>}
         </div>
         <aside className="tv-side">
-          {!wheelSoundEnabled&&<div className="tv-playback-prompt"><p>One tap enables the wheel’s drumroll and tiny “wow.”</p><button onClick={()=>void wheelAudioRef.current?.unlock()}>Enable wheel sounds ♫</button></div>}
-          {autoplayBlocked&&room?.playbackStatus==="playing"&&<div className="tv-playback-prompt" role="status"><p>This browser needs one click on the TV to allow sound. Keep this TV page open; the queue continues automatically.</p><button onClick={()=>tvPlaybackRef.current?.allowPlayback()}>Allow TV playback ▶</button></div>}
+          {((!wheelSoundEnabled&&!!room?.wheel)||(autoplayBlocked&&room?.playbackStatus==="playing"))&&<div className="tv-playback-prompt" role="status"><p>This browser has blocked TV audio. Tap once here; songs and future wheel spins then play automatically while this page stays open.</p><button onClick={()=>{void wheelAudioRef.current?.unlock();if(room?.playbackStatus==="playing")tvPlaybackRef.current?.allowPlayback();}}>Enable TV audio ▶</button></div>}
           <div className="tv-qr"><SingerQRCode size={150}/><strong>{roomCode}</strong><small>Scan to add a song</small></div>
           <div className="tv-lineup"><span>Next up</span><ol>{room?.queue.slice(0,4).map((item,index)=><li key={item.id}><span>{index+1}</span><div><strong>{item.singerName}</strong><small>{item.songTitle}</small></div></li>)}{!room?.queue.length&&<li className="tv-lineup-empty">Lineup’s open. Grab your phone.</li>}</ol></div>
         </aside>

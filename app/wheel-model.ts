@@ -1,6 +1,7 @@
 export type WheelEntry={name:string;songTitle:string;queueId:number|null;filler:boolean};
 export type WheelState={id:string;phase:"ready"|"spinning"|"winner";entries:WheelEntry[];winnerIndex:number|null;startedAt:number|null;endsAt:number|null;rotation:number};
 export const WHEEL_DURATION=7000;
+export function wheelEase(progress:number){return 1-Math.pow(1-Math.max(0,Math.min(1,progress)),5);}
 export function wheelEntries(queue:Array<{id:number;singer_name:string;song_title:string}>):WheelEntry[]{
   const seen=new Set<string>();const entries:WheelEntry[]=[];
   for(const row of queue){const key=row.singer_name.trim().toLowerCase();if(!key||seen.has(key))continue;seen.add(key);entries.push({name:row.singer_name.trim(),songTitle:row.song_title,queueId:row.id,filler:false});}

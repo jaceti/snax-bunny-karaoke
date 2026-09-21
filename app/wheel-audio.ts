@@ -1,14 +1,36 @@
 import type { WheelState } from "./wheel-model";
 
-// A light toy-snare roll, softly pitched and quickening toward the reveal.
+// A steady traditional snare roll, with wire rattle and drum-head resonance.
+export function drumrollHitTimes(duration=7){
+  const hits:number[]=[];
+  for(let hit=0;hit<duration*28;hit++)hits.push(hit/28);
+  return hits;
+}
+export const CYMBAL_DURATION=.65;
+export function cymbalSamples(rate=22050){
+  const samples=new Float32Array(Math.ceil(rate*CYMBAL_DURATION));let seed=8675309,low=0;
+  for(let i=0;i<samples.length;i++){
+    seed=(Math.imul(seed,1664525)+1013904223)>>>0;
+    const time=i/rate,white=seed/0x100000000*2-1;low+=.22*(white-low);
+    const metal=Math.sin(2*Math.PI*4231*time)*Math.sin(2*Math.PI*5873*time);
+    const envelope=Math.min(1,time/.002)*Math.exp(-time*7)*Math.min(1,(CYMBAL_DURATION-time)/.06);
+    samples[i]=((white-low)*.42+metal*.12)*envelope;
+  }
+  return samples;
+}
 export function drumrollSamples(rate=22050,duration=7){
   const samples=new Float32Array(Math.ceil(rate*duration));let seed=271828;
   const noise=()=>{seed=(Math.imul(seed,1664525)+1013904223)>>>0;return seed/0x100000000*2-1;};
-  for(let hit=0;hit<duration;hit+=.15-.095*(hit/duration)){
+  for(const [index,hit]of drumrollHitTimes(duration).entries()){
     const start=Math.floor(hit*rate);
-    for(let i=0;i<rate*.085&&start+i<samples.length;i++){
-      const time=i/rate,envelope=Math.exp(-time*64);
-      samples[start+i]+=(noise()*.11+Math.sin(2*Math.PI*(580+140*(hit/duration))*time)*.1)*envelope;
+    let low=0;const accent=index%2?.82:1;
+    for(let i=0;i<rate*.16&&start+i<samples.length;i++){
+      const time=i/rate,white=noise();low+=.15*(white-low);
+      const wires=(white-low)*Math.exp(-time*31)*.3;
+      const head=(Math.sin(2*Math.PI*185*time)+.4*Math.sin(2*Math.PI*330*time))*Math.exp(-time*46)*.18;
+      const attack=Math.min(1,time/.001);
+      const tail=Math.min(1,(samples.length-start-i)/(rate*.012));
+      samples[start+i]+=(wires+head)*accent*attack*tail;
     }
   }
   return samples;
@@ -26,17 +48,22 @@ export class WheelAudio {
   private speaking=false;
   private wowBuffer:AudioBuffer|null=null;
   private wowSource:AudioBufferSourceNode|null=null;
+  private cymbal:AudioBufferSourceNode|null=null;
   private loadingWow:Promise<void>|null=null;
   private enabled:(value:boolean)=>void;
   constructor(enabled:(value:boolean)=>void){this.enabled=enabled;}
   async unlock(){
     if(this.disposed)return;
     try{
-      this.context??=new AudioContext();
+      if(!this.context){
+        this.context=new AudioContext();
+        this.context.onstatechange=()=>{if(!this.disposed){this.enabled(this.context?.state==="running");this.schedule();}};
+      }
+      // Preload even while browser permission is pending, not after the first spin.
+      void this.preloadWow();
       await this.context.resume();
       if(this.disposed)return;
       this.enabled(this.context.state==="running");
-      void this.preloadWow();
       this.schedule();
     }catch{this.enabled(false);}
   }
@@ -57,6 +84,9 @@ export class WheelAudio {
     if(wheel?.id!==this.wheel?.id||wheel?.phase==="ready")this.stop();
     this.wheel=wheel;this.offset=Date.now()-serverNow;
     if(!wheel){this.stop();return;}
+    // Retry automatically on wheel updates; a TV already allowed to play media
+    // should never need a separate wheel-specific activation.
+    if(!this.context||this.context.state!=="running")void this.unlock();
     this.schedule();
   }
   private schedule(){
@@ -76,6 +106,16 @@ export class WheelAudio {
   private wow(id:string){
     if(this.disposed||this.wheel?.id!==id||this.heard.has(id)||this.scheduled!==id)return;
     this.heard.add(id);clearTimeout(this.timer);try{this.drum?.stop();}catch{}this.drum=null;
+    const ctx=this.context;
+    if(ctx){
+      const samples=cymbalSamples(),buffer=ctx.createBuffer(1,samples.length,22050);buffer.copyToChannel(samples,0);
+      const source=ctx.createBufferSource(),gain=ctx.createGain();source.buffer=buffer;gain.gain.value=.75;
+      source.connect(gain);gain.connect(ctx.destination);source.start();this.cymbal=source;
+    }
+    this.timer=setTimeout(()=>this.playWow(id),CYMBAL_DURATION*1000);
+  }
+  private playWow(id:string){
+    if(this.disposed||this.wheel?.id!==id||this.scheduled!==id)return;
     if(this.context&&this.wowBuffer){
       const source=this.context.createBufferSource(),gain=this.context.createGain();
       source.buffer=this.wowBuffer;gain.gain.value=.8;
@@ -97,6 +137,6 @@ export class WheelAudio {
       gain.gain.setValueAtTime(0,ctx.currentTime);gain.gain.linearRampToValueAtTime(.025,ctx.currentTime+delay+.15);gain.gain.exponentialRampToValueAtTime(.001,ctx.currentTime+delay+2.2);tone.connect(gain);gain.connect(ctx.destination);tone.start(ctx.currentTime+delay);tone.stop(ctx.currentTime+delay+2.25);
     }
   }
-  private stop(){clearTimeout(this.timer);try{this.drum?.stop();}catch{}try{this.wowSource?.stop();}catch{}this.drum=null;this.wowSource=null;this.scheduled=null;if(this.speaking&&"speechSynthesis" in window){window.speechSynthesis.cancel();this.speaking=false;}}
-  dispose(){this.disposed=true;this.stop();void this.context?.close();}
+  private stop(){clearTimeout(this.timer);try{this.drum?.stop();}catch{}try{this.wowSource?.stop();}catch{}try{this.cymbal?.stop();}catch{}this.drum=null;this.wowSource=null;this.cymbal=null;this.scheduled=null;if(this.speaking&&"speechSynthesis" in window){window.speechSynthesis.cancel();this.speaking=false;}}
+  dispose(){this.disposed=true;this.stop();if(this.context)this.context.onstatechange=null;void this.context?.close();}
 }
