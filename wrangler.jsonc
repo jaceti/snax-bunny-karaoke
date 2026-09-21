@@ -5,8 +5,10 @@
   "compatibility_flags": ["nodejs_compat"],
   // Cloudflare account "Snax"
   "account_id": "b0f1589936f87faae686bf430775fa17",
-  // vinext's Worker entry. `main` is what makes this a Worker rather than a static site.
-  "main": "vinext/server/fetch-handler",
+  // Custom entry delegates web requests to vinext and handles the nightly reset.
+  "main": "worker.ts",
+  // 3 AM Pacific is 10 UTC in summer / 11 UTC in winter; the other run is a no-op.
+  "triggers": { "crons": ["0 10,11 * * *"] },
   "assets": {
     "directory": "dist/client",
     "not_found_handling": "none",

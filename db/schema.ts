@@ -54,3 +54,9 @@ export const singerStats = sqliteTable("singer_stats", {
   sungCount: integer("sung_count").notNull().default(0),
   lastSungAt: text("last_sung_at"),
 }, (table) => [primaryKey({ columns: [table.roomCode, table.singerKey] })]);
+
+export const dailyReset = sqliteTable("daily_reset", {
+  id: integer("id").primaryKey(),
+  night: text("night").notNull(),
+  resetAt: text("reset_at"),
+});

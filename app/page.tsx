@@ -243,6 +243,23 @@ export default function Home(){
 
   useEffect(()=>{tvPlaybackRef.current?.update(room?.nowPlaying||null,room?.playbackStatus||"idle");},[room,screen,roomCode]);
 
+  // Stop the TV locally at the same cutoff even if venue Wi-Fi drops at 3 AM.
+  useEffect(()=>{
+    if(screen!=="tv")return;
+    let night=singerNight();let timer=0;
+    const check=()=>{
+      const current=singerNight();
+      if(current!==night){
+        night=current;tvPlaybackRef.current?.update(null,"idle");
+        setRoom(value=>value?{...value,nowPlaying:null,queue:[],playbackStatus:"idle",completedCount:0,endsAt:null,requestsOpen:true,requestsToggle:true}:value);
+        void fetchRoom(roomCode,true,"tv");
+      }
+      window.clearTimeout(timer);timer=window.setTimeout(check,Math.max(1,nextSingerReset()-Date.now()));
+    };
+    check();window.addEventListener("pageshow",check);window.addEventListener("focus",check);document.addEventListener("visibilitychange",check);
+    return()=>{window.clearTimeout(timer);window.removeEventListener("pageshow",check);window.removeEventListener("focus",check);document.removeEventListener("visibilitychange",check);};
+  },[screen,roomCode,fetchRoom]);
+
   function home(){history.replaceState({},"","/");setScreen("landing");setRoom(null);setNotice("");}
   function currentSinger(){
     const saved=readSingerIdentity(browserStorage());
@@ -326,6 +343,7 @@ export default function Home(){
           <button type="button" disabled={!canHost||busy||!room?.queue.length} onClick={()=>{const count=room?.queue.length||0;if(window.confirm(`Clear all ${count} waiting ${count===1?"song":"songs"}? This cannot be undone. Any song currently playing will continue.`))void setEvent({action:"clear_queue"});}}>Clear queue</button>
         </div>
         <p className="event-note">Balance puts first-timers ahead and spaces out repeat singers, so nobody sings twice before everyone waiting has had a turn.</p>
+        <p className="event-note">Fresh start daily at 3 AM Pacific: the active song, waiting lineup, turn counts, and last-call settings reset. Your room and QR codes stay the same.</p>
       </div>
       {canHost&&hostShareUrl&&<section className="host-share" aria-label="Share host controls">
         <div><p className="eyebrow">Share host controls</p><h2>Scan to host</h2><p>Anyone who scans this can control this room’s playback and lineup. Keep it off the public TV.</p><button type="button" onClick={()=>void copyHostLink()}>Copy host link</button><small>Room {roomCode} · Same code for this room</small></div>
@@ -376,7 +394,7 @@ function FitText({text,max,min=18,className}:{text:string;max:number;min?:number
 
 // Venmo tip for the host. Tries the Venmo app first (prefilled recipient, amount and
 // note), then falls back to Venmo on the web if the app doesn't take over.
-const VENMO_HANDLE="promqueen";
+const VENMO_HANDLE="snaxthebunny";
 function TipCard(){
   const [amount,setAmount]=useState<number|null>(null);
   function tip(value:number|null){

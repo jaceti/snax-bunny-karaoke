@@ -74,7 +74,8 @@ export default function PrivacyPage() {
             to the singer page or scanning again uses the same name for that karaoke night.
             This does not identify your phone or link different browsers. The saved name expires
             at 3 AM, including daylight-saving changes; expired local data is removed when the
-            singer page is next active. This reset does not clear songs already in the queue.
+            singer page is next active. At 3 AM Pacific the app also clears the active room’s queue,
+            stops its current song, and resets its nightly singer turn counts and event settings.
           </p>
           <p>
             The app stores and accesses private room, host, invitation, TV, consent, and random
@@ -104,8 +105,9 @@ export default function PrivacyPage() {
           <p>
             When a result is selected, its title, YouTube video ID, and thumbnail link are stored
             only to operate the queue. A played or skipped selection is deleted immediately. Any
-            other queue selection is automatically deleted before it reaches 30 days through
-            cleanup that runs whenever the app is used.
+            remaining selections in the active room are cleared by the daily 3 AM Pacific reset.
+            If a scheduled reset is delayed, the app catches up before the next room request.
+            Older rooms retain the existing 30-day cleanup.
           </p>
           <p>
             The room code and hashed access credentials are not YouTube API data and remain
