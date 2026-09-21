@@ -1,5 +1,5 @@
 import { env } from "cloudflare:workers";
-import { karaokeScore, playable, type VideoDetails } from "./ranking";
+import { karaokeScore, karaokeEligible, playable, type VideoDetails } from "./ranking";
 
 type YouTubeSearchItem = { id?: { videoId?: string }; snippet?: { title?: string; channelTitle?: string; thumbnails?: { medium?: { url?: string }; default?: { url?: string } } } };
 
@@ -46,7 +46,7 @@ export async function GET(request: Request) {
     const results = items.flatMap((item, index) => {
       const id = item.id?.videoId;
       const video = id ? byId.get(id) : undefined;
-      if (!id || !item.snippet || !video || !playable(video, region)) return [];
+      if (!id || !item.snippet || !video || !playable(video, region) || !karaokeEligible(video)) return [];
       return [{ videoId: id, title: decode(item.snippet.title || "Karaoke track"), channel: decode(item.snippet.channelTitle || "YouTube"), thumbnail: item.snippet.thumbnails?.medium?.url || item.snippet.thumbnails?.default?.url || "", score: karaokeScore(video, q, index) }];
     }).sort((a, b) => b.score - a.score).map(({ score, ...song }) => song);
     return Response.json({ results }, { headers: { "cache-control": "no-store" } });
