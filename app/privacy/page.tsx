@@ -6,7 +6,7 @@ export const metadata: Metadata = {
   description: "What Snax the Bunny Karaoke collects, how YouTube API Services are used, and how to request deletion.",
 };
 
-const UPDATED = "September 3, 2026";
+const UPDATED = "September 20, 2026";
 
 export default function PrivacyPage() {
   return (
@@ -69,6 +69,13 @@ export default function PrivacyPage() {
 
         <article>
           <h2>Cookies, local storage, and similar technologies</h2>
+          <p>
+            We remember your stage name in this browser until 3 AM Pacific each day, so returning
+            to the singer page or scanning again uses the same name for that karaoke night.
+            This does not identify your phone or link different browsers. The saved name expires
+            at 3 AM, including daylight-saving changes; expired local data is removed when the
+            singer page is next active. This reset does not clear songs already in the queue.
+          </p>
           <p>
             The app stores and accesses private room, host, invitation, TV, consent, and random
             guest-device identifiers in your browser&rsquo;s local storage so the same device can

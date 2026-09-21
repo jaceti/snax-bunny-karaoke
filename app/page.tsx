@@ -4,6 +4,7 @@ import { FormEvent, useCallback, useEffect, useLayoutEffect, useRef, useState } 
 import { QRCodeSVG } from "qrcode.react";
 import { TvPlayback, type TvPlayer } from "./tv-playback";
 import { acceptHostInvite, hostShareLink, joinSharedHost } from "./host-access";
+import { SINGER_MEMORY_KEY, singerNight, nextSingerReset, readSingerIdentity, rememberSinger, type SingerIdentity } from "./singer-memory";
 
 type Song={videoId:string;title:string;channel:string;thumbnail:string};
 type QueueItem={id:number;singerName:string;songTitle:string;videoTitle:string;videoId:string;thumbnailUrl:string;sortOrder:number;status:"pending"|"playing"|"done";startedAt:string|null;sungCount?:number};
@@ -15,6 +16,8 @@ declare global { interface Window { YT?:{Player:new(id:string,options:{height:st
 
 const cleanCode=(value:string)=>value.toUpperCase().replace(/[^A-Z0-9]/g,"").slice(0,6);
 const messageOf=(error:unknown)=>error instanceof Error?error.message:"Something went sideways. Try again.";
+function browserStorage(){try{return window.localStorage;}catch{return null;}}
+function rememberedConsent(){try{return browserStorage()?.getItem("snax-consent")==="1";}catch{return false;}}
 
 export default function Home(){
   const [screen,setScreen]=useState<Screen>("landing");
@@ -22,6 +25,8 @@ export default function Home(){
   const [inviteToken,setInviteToken]=useState("");
   const [tvToken,setTvToken]=useState("");
   const [singerName,setSingerName]=useState("");
+  const [singerIdentity,setSingerIdentity]=useState<SingerIdentity|null>(null);
+  const singerIdentityRef=useRef<SingerIdentity|null>(null);
   const [room,setRoom]=useState<RoomState|null>(null);
   const [canHost,setCanHost]=useState(false);
   const [hostShareUrl,setHostShareUrl]=useState("");
@@ -50,7 +55,7 @@ export default function Home(){
   const completeSongRef=useRef<(id:number)=>Promise<boolean>>(async()=>false); const playerMountRef=useRef<HTMLDivElement|null>(null);
 
   useEffect(()=>{ screenRef.current=screen; },[screen]);
-  useEffect(()=>{ setConsent(localStorage.getItem("snax-consent")==="1"); },[]);
+  useEffect(()=>{ setConsent(rememberedConsent()); },[]);
   function acceptConsent(value:boolean){ setConsent(value); try{ localStorage.setItem("snax-consent",value?"1":"0"); }catch{} }
 
   const headersFor=useCallback((mode=screenRef.current):Record<string,string>=>{
@@ -98,7 +103,7 @@ export default function Home(){
     }else if(params.get("tv")&&code&&television.length>30){
       codeRef.current=code;tvRef.current=television;inviteRef.current=invite;setRoomCode(code);setTvToken(television);setInviteToken(invite);setScreen("tv");void fetchRoom(code,false,"tv");
     }else if(params.get("room")&&code&&invite.length>30){
-      codeRef.current=code;inviteRef.current=invite;setRoomCode(code);setInviteToken(invite);setScreen("name");void fetchRoom(code,false,"name");
+      codeRef.current=code;inviteRef.current=invite;setRoomCode(code);setInviteToken(invite);restoreSinger();void fetchRoom(code,false,"name");
     }else if(params.get("tv")==="now"){
       // Hub page "Open TV display": bring up the big screen for tonight's room.
       void openCurrentTv();
@@ -142,7 +147,7 @@ export default function Home(){
     setBusy(true);setNotice("");
     try{const response=await fetch("/api/rooms/current",{cache:"no-store"});const data=await response.json() as {code?:string;inviteToken?:string;error?:string};
       if(!response.ok||!data.code||!data.inviteToken)throw new Error(data.error||"Snax hasn’t opened tonight’s room yet. Hang tight.");
-      codeRef.current=data.code;inviteRef.current=data.inviteToken;setRoomCode(data.code);setInviteToken(data.inviteToken);history.replaceState({},"",`?room=${data.code}&invite=${encodeURIComponent(data.inviteToken)}`);setScreen("name");await fetchRoom(data.code,false,"name");
+      codeRef.current=data.code;inviteRef.current=data.inviteToken;setRoomCode(data.code);setInviteToken(data.inviteToken);history.replaceState({},"",`?room=${data.code}&invite=${encodeURIComponent(data.inviteToken)}`);restoreSinger();await fetchRoom(data.code,false,"name");
     }catch(error){history.replaceState({},"","/");setScreen("landing");setNotice(messageOf(error));}finally{setBusy(false);}
   }
 
@@ -213,8 +218,10 @@ export default function Home(){
 
 
   async function addSong(song:Song){
+    const identity=currentSinger();
+    if(!identity){setSingerName("");setSingerIdentity(null);singerIdentityRef.current=null;setScreen("name");setNotice("It’s a new karaoke day. Please enter your stage name again.");return;}
     setBusy(true);setNotice("");
-    try{const response=await fetch(`/api/rooms/${roomCode}`,{method:"POST",headers:{"content-type":"application/json","x-room-invite":inviteRef.current},body:JSON.stringify({singerName:singerName.trim(),songTitle:song.title,videoTitle:song.title,videoId:song.videoId,thumbnailUrl:song.thumbnail})});const data=await response.json() as RoomState&{error?:string};if(!response.ok)throw new Error(data.error||"That song missed the queue.");setRoom(data);setResults([]);setShown(PAGE_SIZE);setQuery("");setNotice("Your song is in the lineup!");}
+    try{const response=await fetch(`/api/rooms/${roomCode}`,{method:"POST",headers:{"content-type":"application/json","x-room-invite":inviteRef.current},body:JSON.stringify({singerName:identity.name,songTitle:song.title,videoTitle:song.title,videoId:song.videoId,thumbnailUrl:song.thumbnail})});const data=await response.json() as RoomState&{error?:string};if(!response.ok)throw new Error(data.error||"That song missed the queue.");setRoom(data);setResults([]);setShown(PAGE_SIZE);setQuery("");setNotice("Your song is in the lineup!");}
     catch(error){setNotice(messageOf(error));}finally{setBusy(false);}
   }
 
@@ -237,6 +244,48 @@ export default function Home(){
   useEffect(()=>{tvPlaybackRef.current?.update(room?.nowPlaying||null,room?.playbackStatus||"idle");},[room,screen,roomCode]);
 
   function home(){history.replaceState({},"","/");setScreen("landing");setRoom(null);setNotice("");}
+  function currentSinger(){
+    const saved=readSingerIdentity(browserStorage());
+    const memory=singerIdentityRef.current;
+    return saved||(memory?.night===singerNight()?memory:null);
+  }
+  function restoreSinger(){
+    const identity=currentSinger();
+    singerIdentityRef.current=identity;setSingerIdentity(identity);setSingerName(identity?.name||"");
+    const mode=identity&&rememberedConsent()?"singer":"name";
+    screenRef.current=mode;setScreen(mode);
+  }
+  function enterAsSinger(event:FormEvent){
+    event.preventDefault();
+    if(!consent){setNotice("Tick the box and you’re in.");return;}
+    try{
+      const existing=currentSinger();
+      const saved=rememberSinger(browserStorage(),existing?.name||singerName);
+      singerIdentityRef.current=saved.identity;setSingerIdentity(saved.identity);setSingerName(saved.identity.name);screenRef.current="singer";setScreen("singer");
+      if(!saved.persisted)setNotice("This browser won’t save your name. Keep this tab open, or allow site storage to remember you until 3 AM Pacific.");
+    }catch(error){setNotice(messageOf(error));}
+  }
+  useEffect(()=>{
+    if(screen!=="singer"&&screen!=="name")return;
+    let timer=0;
+    const sync=()=>{
+      const previous=singerIdentityRef.current;
+      const identity=currentSinger();
+      singerIdentityRef.current=identity;setSingerIdentity(identity);
+      if(identity){setSingerName(identity.name);if(rememberedConsent()){screenRef.current="singer";setScreen("singer");}}
+      else if(previous||screenRef.current==="singer"){
+        setSingerName("");setResults([]);setQuery("");screenRef.current="name";setScreen("name");
+        setNotice("Names reset at 3 AM Pacific. Please enter your stage name for the new day.");
+      }
+      window.clearTimeout(timer);timer=window.setTimeout(sync,Math.max(1,nextSingerReset()-Date.now()));
+    };
+    const wake=()=>{if(document.visibilityState!=="hidden")sync();};
+    const changed=(event:StorageEvent)=>{if(event.key===SINGER_MEMORY_KEY||event.key==="snax-consent"||event.key===null)sync();};
+    sync();window.addEventListener("focus",wake);window.addEventListener("pageshow",wake);document.addEventListener("visibilitychange",wake);window.addEventListener("storage",changed);
+    return()=>{window.clearTimeout(timer);window.removeEventListener("focus",wake);window.removeEventListener("pageshow",wake);document.removeEventListener("visibilitychange",wake);window.removeEventListener("storage",changed);};
+  // Session state is held in a ref so wake/expiry handlers always use the latest name.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[screen]);
   async function copyHostLink(){
     try{await navigator.clipboard.writeText(hostShareUrl);setNotice("Host link copied. Anyone who opens it can control this room.");}
     catch{setNotice("Couldn’t copy the link. Scan the host QR on the Snax page instead.");}
@@ -253,9 +302,9 @@ export default function Home(){
       <Footer/>
     </>}
 
-    {screen==="name"&&<section className="phone-stage"><button className="wordmark" onClick={home}>SNAX</button><div className="phone-card name-card"><SnaxPortrait small/><p className="eyebrow">Room {roomCode}</p><h1>What’s your stage name?</h1><form onSubmit={(event)=>{event.preventDefault();if(!singerName.trim()){setNotice("Give us a stage name first.");return;}if(!consent){setNotice("Tick the box and you’re in.");return;}setScreen("singer");}}><label htmlFor="singer">Name</label><input id="singer" value={singerName} onChange={event=>setSingerName(event.target.value)} maxLength={32} placeholder="Bunnyoncé" autoFocus/><label className="consent-check"><input type="checkbox" checked={consent} onChange={event=>acceptConsent(event.target.checked)}/><span>I agree to the <a href="/privacy">Privacy Policy</a>, <a href="/terms">Terms</a>, and <a href="https://www.youtube.com/t/terms" target="_blank" rel="noreferrer">YouTube Terms</a>.</span></label><button disabled={busy||!consent}>Enter the room <span>→</span></button></form><p className="fine">No sign-in. Just songs.</p></div></section>}
+    {screen==="name"&&<section className="phone-stage"><button className="wordmark" onClick={home}>SNAX</button><div className="phone-card name-card"><SnaxPortrait small/><p className="eyebrow">Room {roomCode}</p><h1>What’s your stage name?</h1><form onSubmit={enterAsSinger}><label htmlFor="singer">Name</label><input id="singer" value={singerName} readOnly={!!singerIdentity} onChange={event=>setSingerName(event.target.value)} maxLength={32} placeholder="Bunnyoncé" autoFocus/><label className="consent-check"><input type="checkbox" checked={consent} onChange={event=>acceptConsent(event.target.checked)}/><span>I agree to the <a href="/privacy">Privacy Policy</a>, <a href="/terms">Terms</a>, and <a href="https://www.youtube.com/t/terms" target="_blank" rel="noreferrer">YouTube Terms</a>.</span></label><button disabled={busy||!consent}>Enter the room <span>→</span></button></form><p className="fine">This browser remembers your name until 3 AM Pacific. No sign-in needed.</p></div></section>}
 
-    {screen==="singer"&&<section className="singer-stage"><header className="app-header"><button className="wordmark" onClick={home}>SNAX</button><span>Room <strong>{roomCode}</strong></span><span className="singer-chip">{singerName}</span></header><div className="singer-grid"><div className="search-panel"><p className="eyebrow">You’re in, {singerName}</p><h1>Pick your song</h1>{room&&!room.requestsOpen&&<p className="requests-closed">Requests are closed for tonight. The bunny is tired.</p>}{(!room||room.requestsOpen)&&<><form className="song-search" onSubmit={search}><label htmlFor="song">Search a song or artist</label><div><input id="song" value={query} onChange={event=>setQuery(event.target.value)} placeholder="Robyn, Chappell Roan, ABBA…"/><button disabled={searching}>{searching?"Searching…":"Find karaoke"}</button></div><small>Karaoke with lyrics first, with HD versions preferred.</small></form><div className="results">{results.slice(0,shown).map(song=><article key={song.videoId}><img src={song.thumbnail} alt=""/><div><strong><a href={`https://www.youtube.com/watch?v=${song.videoId}`} target="_blank" rel="noreferrer" title="Open on YouTube">{song.title}</a></strong><small>{song.channel}</small><button onClick={()=>void addSong(song)} disabled={busy}>Add to lineup +</button></div></article>)}</div>{results.length>shown&&<button type="button" className="load-more" onClick={()=>setShown(count=>count+PAGE_SIZE)}>Show more ({results.length-shown} left) ↓</button>}{results.length>0&&results.length<=shown&&<p className="results-end">That’s every match for this search. Try adding the artist or a word from the title for more.</p>}</>}</div><QueuePanel room={room} busy={busy} onControl={control}/></div></section>}
+    {screen==="singer"&&<section className="singer-stage"><header className="app-header"><button className="wordmark" onClick={home}>SNAX</button><span>Room <strong>{roomCode}</strong></span><span className="singer-chip">{singerName}</span></header><div className="singer-grid"><div className="search-panel"><p className="eyebrow">You’re in, {singerName}</p><p className="singer-memory-note">Your name stays the same on this browser until 3 AM Pacific.</p><h1>Pick your song</h1>{room&&!room.requestsOpen&&<p className="requests-closed">Requests are closed for tonight. The bunny is tired.</p>}{(!room||room.requestsOpen)&&<><form className="song-search" onSubmit={search}><label htmlFor="song">Search a song or artist</label><div><input id="song" value={query} onChange={event=>setQuery(event.target.value)} placeholder="Robyn, Chappell Roan, ABBA…"/><button disabled={searching}>{searching?"Searching…":"Find karaoke"}</button></div><small>Karaoke with lyrics first, with HD versions preferred.</small></form><div className="results">{results.slice(0,shown).map(song=><article key={song.videoId}><img src={song.thumbnail} alt=""/><div><strong><a href={`https://www.youtube.com/watch?v=${song.videoId}`} target="_blank" rel="noreferrer" title="Open on YouTube">{song.title}</a></strong><small>{song.channel}</small><button onClick={()=>void addSong(song)} disabled={busy}>Add to lineup +</button></div></article>)}</div>{results.length>shown&&<button type="button" className="load-more" onClick={()=>setShown(count=>count+PAGE_SIZE)}>Show more ({results.length-shown} left) ↓</button>}{results.length>0&&results.length<=shown&&<p className="results-end">That’s every match for this search. Try adding the artist or a word from the title for more.</p>}</>}</div><QueuePanel room={room} busy={busy} onControl={control}/></div></section>}
 
     {screen==="host"&&<section className="host-stage"><header className="app-header"><button className="wordmark" onClick={home}>SNAX</button><div className="host-room">Host console · Room <strong>{roomCode}</strong></div></header>
       {room?.isCurrent===false&&<div className="requests-closed">This is an older room. The TV and singer QR may be using tonight’s room. <button onClick={()=>void resumeOrCreateRoom()} disabled={busy}>Connect to tonight’s room</button></div>}
