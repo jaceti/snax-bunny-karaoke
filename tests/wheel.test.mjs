@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
-import { wheelEntries,pickWheelWinner,wheelRotation,WHEEL_DURATION } from '../app/wheel-model.ts';
+import { wheelEntries,wheelEntryLabel,pickWheelWinner,wheelRotation,WHEEL_DURATION } from '../app/wheel-model.ts';
 import { openWheel,spinWheel,closeWheel,readWheel,finishInterruptedSong } from '../app/wheel-server.ts';
 import { ensureDailyReset } from '../app/daily-reset.ts';
 
@@ -37,6 +37,14 @@ test('winner sampling is uniform over singers and rejects modulo-biased random v
   assert.deepEqual(counts,[100,100,100]);
   const words=[0xffffffff,2];assert.equal(pickWheelWinner(roster,()=>words.shift()),2);
   for(let i=0;i<4;i++)assert.equal(Math.round((wheelRotation(i,4)+(i+.5)*90)%360),0);
+});
+
+test('Snax appears once; the decorative slot is a non-winning star even on older wheels',()=>{
+  const roster=wheelEntries([{id:1,singer_name:'Snax',song_title:'first'},{id:2,singer_name:' SNAX ',song_title:'later'}]);
+  assert.deepEqual(roster.map(wheelEntryLabel),['SNAX','★']);
+  assert.equal(roster[1].name,'★');
+  assert.equal(wheelEntryLabel({...roster[1],name:'SNAX · JUST WATCHING'}),'★');
+  for(let i=0;i<100;i++)assert.equal(pickWheelWinner(roster,()=>i),0);
 });
 
 test('landing makes the winner current and the interrupted singer next; closing plays the winner',async()=>{
