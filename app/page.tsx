@@ -157,6 +157,9 @@ export default function Home(){
   }
 
   async function openCurrentTv(){
+    // Called by the landing-page button while its trusted click is still active.
+    wheelAudioRef.current??=new WheelAudio(setWheelSoundEnabled);
+    void wheelAudioRef.current.unlock();
     setBusy(true);setNotice("");
     try{const response=await fetch("/api/rooms/current",{cache:"no-store"});const data=await response.json() as {code?:string;inviteToken?:string;tvToken?:string|null;error?:string};
       if(!response.ok||!data.code||!data.inviteToken)throw new Error(data.error||"Snax hasn’t opened tonight’s room yet. Hang tight.");
@@ -248,16 +251,18 @@ export default function Home(){
 
   useEffect(()=>{tvPlaybackRef.current?.update(room?.nowPlaying||null,room?.playbackStatus||"idle");},[room,screen,roomCode]);
   useEffect(()=>{
-    if(screen!=="tv")return;
-    const audio=new WheelAudio(setWheelSoundEnabled);wheelAudioRef.current=audio;
+    // Preserve one audio context across landing -> TV. Recreating it discarded
+    // the activation from the original Open TV button.
+    const audio=wheelAudioRef.current??new WheelAudio(setWheelSoundEnabled);wheelAudioRef.current=audio;
     const enable=()=>void audio.unlock();
     const gestures=["pointerdown","click","touchend","keydown"] as const;
     for(const gesture of gestures)document.addEventListener(gesture,enable,{capture:true,passive:true});
     const wake=()=>{if(document.visibilityState==="visible")enable();};
-    document.addEventListener("visibilitychange",wake);window.addEventListener("pageshow",enable);enable();
+    document.addEventListener("visibilitychange",wake);window.addEventListener("pageshow",enable);
     return()=>{for(const gesture of gestures)document.removeEventListener(gesture,enable,true);document.removeEventListener("visibilitychange",wake);window.removeEventListener("pageshow",enable);audio.dispose();wheelAudioRef.current=null;};
-  },[screen]);
-  useEffect(()=>{wheelAudioRef.current?.sync(room?.wheel||null,room?.serverNow||Date.now());},[room,screen]);
+  },[]);
+  useEffect(()=>{if(screen==="tv")void wheelAudioRef.current?.unlock();},[screen]);
+  useEffect(()=>{wheelAudioRef.current?.sync(screen==="tv"?room?.wheel||null:null,room?.serverNow||Date.now());},[room,screen]);
 
   // Stop the TV locally at the same cutoff even if venue Wi-Fi drops at 3 AM.
   useEffect(()=>{
@@ -377,7 +382,7 @@ export default function Home(){
       </header>
       <div className="tv-body">
         <div className="tv-video">
-          {room?.wheel&&<WheelView wheel={room.wheel} serverNow={room.serverNow}/>}
+          {room?.wheel&&<WheelView wheel={room.wheel} serverNow={room.serverNow} onLand={id=>wheelAudioRef.current?.land(id)}/>}
           <div ref={playerMountRef} className="youtube-player" style={{visibility:room?.nowPlaying&&!interlude&&!room?.wheel?"visible":"hidden"}} aria-hidden={!room?.nowPlaying||interlude||!!room?.wheel}/>
           {!room?.wheel&&(!room?.nowPlaying||interlude)&&<div className={`tv-idle ${interlude&&room?.nowPlaying?"tv-idle-interlude":""}`}>
             <img src="/snax-profile-hd.png" alt="Snax the Bunny" className="tv-idle-bunny"/>

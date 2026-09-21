@@ -47,6 +47,7 @@ export class WheelAudio {
   private disposed=false;
   private speaking=false;
   private wowBuffer:AudioBuffer|null=null;
+  private drumBuffer:AudioBuffer|null=null;
   private wowSource:AudioBufferSourceNode|null=null;
   private cymbal:AudioBufferSourceNode|null=null;
   private loadingWow:Promise<void>|null=null;
@@ -70,19 +71,24 @@ export class WheelAudio {
   private preloadWow(){
     if(!this.loadingWow)this.loadingWow=(async()=>{
       try{
-        const response=await fetch("/snax-wheel-wow.mp3");
-        if(!response.ok||this.disposed)return;
-        const bytes=await response.arrayBuffer();
-        if(!this.context||this.disposed)return;
-        this.wowBuffer=await this.context.decodeAudioData(bytes);
+        await Promise.all(["wow","drumroll"].map(async kind=>{
+          const response=await fetch(`/snax-wheel-${kind}.mp3`);
+          if(!response.ok||this.disposed)return;
+          const bytes=await response.arrayBuffer();
+          if(!this.context||this.disposed)return;
+          const buffer=await this.context.decodeAudioData(bytes);
+          if(kind==="wow")this.wowBuffer=buffer;else this.drumBuffer=buffer;
+        }));
       }catch{/* The built-in tiny wow remains available if the recording cannot load. */}
     })();
     return this.loadingWow;
   }
   sync(wheel:WheelState|null,serverNow:number){
     if(this.disposed)return;
+    // Anchor once per spin. Poll/network jitter must not move the finish line.
+    if(wheel?.id!==this.wheel?.id||wheel?.startedAt!==this.wheel?.startedAt)this.offset=Date.now()-serverNow;
     if(wheel?.id!==this.wheel?.id||wheel?.phase==="ready")this.stop();
-    this.wheel=wheel;this.offset=Date.now()-serverNow;
+    this.wheel=wheel;
     if(!wheel){this.stop();return;}
     // Retry automatically on wheel updates; a TV already allowed to play media
     // should never need a separate wheel-specific activation.
@@ -93,16 +99,19 @@ export class WheelAudio {
     const wheel=this.wheel,ctx=this.context;
     if(!wheel||!ctx||ctx.state!=="running"||wheel.startedAt===null||wheel.endsAt===null)return;
     const now=Date.now()-this.offset,remaining=wheel.endsAt-now;
-    if(this.scheduled===wheel.id){if(remaining<=0)this.wow(wheel.id);return;}
+    if(this.scheduled===wheel.id){if(wheel.phase==="winner"||remaining<=0)this.wow(wheel.id);return;}
     // Opening/reloading an already-finished result must never replay the sound.
     if(remaining<=0||wheel.phase!=="spinning")return;
     this.scheduled=wheel.id;
-    const samples=drumrollSamples();const buffer=ctx.createBuffer(1,samples.length,22050);buffer.copyToChannel(samples,0);
+    let buffer=this.drumBuffer;
+    if(!buffer){const samples=drumrollSamples();buffer=ctx.createBuffer(1,samples.length,22050);buffer.copyToChannel(samples,0);}
     const source=ctx.createBufferSource();source.buffer=buffer;
-    const gain=ctx.createGain();gain.gain.value=.65;source.connect(gain);gain.connect(ctx.destination);
+    const gain=ctx.createGain();gain.gain.value=this.drumBuffer ? 0.6 : 0.38;source.connect(gain);gain.connect(ctx.destination);
     source.start(0,Math.max(0,(now-wheel.startedAt)/1000));source.stop(ctx.currentTime+remaining/1000);this.drum=source;
     this.timer=setTimeout(()=>this.wow(wheel.id),remaining);
   }
+  // The rendered wheel can end the roll immediately, even after a delayed poll.
+  land(id:string){this.wow(id);}
   private wow(id:string){
     if(this.disposed||this.wheel?.id!==id||this.heard.has(id)||this.scheduled!==id)return;
     this.heard.add(id);clearTimeout(this.timer);try{this.drum?.stop();}catch{}this.drum=null;

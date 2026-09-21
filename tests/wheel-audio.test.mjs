@@ -9,7 +9,7 @@ function audioFixture(t){
   class Context{
     state='running';currentTime=0;destination={};async resume(){}async close(){}
     createBuffer(){return {copyToChannel(){}};}
-    async decodeAudioData(){return {recordedWow:true};}
+    async decodeAudioData(bytes){return {recordedWow:new Uint8Array(bytes)[0]===1,recordedDrum:new Uint8Array(bytes)[0]===2};}
     createBufferSource(){const node={connect(){},start(...args){this.args=args;},stop(){this.stopped=true;}};sources.push(node);return node;}
     createGain(){return {gain:{...param},connect(){}};}
     createOscillator(){return {frequency:param,connect(){},start(){},stop(){}};}
@@ -60,9 +60,9 @@ test('reopening a finished result is silent and closing cancels a pending reveal
 });
 test('the combined recording replaces browser speech and follows the cymbal once',async t=>{
   const {spoken,sources,restore}=audioFixture(t);const audio=new WheelAudio(()=>{});t.after(()=>{audio.dispose();restore();});
-  t.mock.method(globalThis,'fetch',async url=>{assert.equal(url,'/snax-wheel-wow.mp3');return {ok:true,arrayBuffer:async()=>new ArrayBuffer(8)};});
-  audio.sync(wheel,1000);await audio.unlock();await Promise.resolve();await Promise.resolve();await Promise.resolve();
-  assert.equal(sources.length,1);t.mock.timers.tick(7000);
+  t.mock.method(globalThis,'fetch',async url=>{assert.match(url,/^\/snax-wheel-(wow|drumroll)\.mp3$/);return {ok:true,arrayBuffer:async()=>new Uint8Array([url.includes('wow')?1:2]).buffer};});
+  await audio.unlock();for(let i=0;i<6;i++)await Promise.resolve();audio.sync(wheel,1000);
+  assert.equal(sources.length,1);assert.equal(sources[0].buffer.recordedDrum,true);t.mock.timers.tick(7000);
   assert.equal(sources.length,2);assert.equal(sources[1].buffer.recordedWow,undefined);
   audio.sync({...wheel,phase:'winner'},8000);t.mock.timers.tick(CYMBAL_DURATION*1000);
   assert.equal(sources.length,3);assert.equal(sources[2].buffer.recordedWow,true);assert.equal(spoken.length,0);
@@ -73,4 +73,17 @@ test('closing during the cymbal cancels the subsequent wow',async t=>{
   const {spoken,sources,restore}=audioFixture(t);const audio=new WheelAudio(()=>{});t.after(()=>{audio.dispose();restore();});
   audio.sync(wheel,1000);await audio.unlock();t.mock.timers.tick(7000);assert.equal(sources.length,2);
   audio.sync(null,8000);assert.equal(sources[1].stopped,true);t.mock.timers.tick(1000);assert.equal(spoken.length,0);
+});
+test('polling jitter cannot prolong a spin; a visual landing stops the drum immediately',async t=>{
+  const {sources,restore}=audioFixture(t);const audio=new WheelAudio(()=>{});t.after(()=>{audio.dispose();restore();});
+  audio.sync(wheel,1000);await audio.unlock();t.mock.timers.tick(3000);
+  audio.sync(wheel,3500); // A delayed server snapshot must not move the clock.
+  t.mock.timers.tick(3900);audio.land(wheel.id);
+  assert.equal(sources[0].stopped,true);assert.equal(sources.length,2);
+  t.mock.timers.tick(100);audio.sync({...wheel,phase:'winner'},8000);assert.equal(sources.length,2);
+});
+test('authoritative winner update stops audio even before the local timer fires',async t=>{
+  const {sources,restore}=audioFixture(t);const audio=new WheelAudio(()=>{});t.after(()=>{audio.dispose();restore();});
+  audio.sync(wheel,1000);await audio.unlock();t.mock.timers.tick(6500);
+  audio.sync({...wheel,phase:'winner'},8000);assert.equal(sources[0].stopped,true);assert.equal(sources.length,2);
 });
