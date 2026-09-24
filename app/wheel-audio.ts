@@ -51,6 +51,16 @@ export class WheelAudio {
   private wowSource:AudioBufferSourceNode|null=null;
   private cymbal:AudioBufferSourceNode|null=null;
   private loadingWow:Promise<void>|null=null;
+  // Background music under the TV's between-songs "Up next" card.
+  private interludeBuffer:AudioBuffer|null=null;
+  private interludeSource:AudioBufferSourceNode|null=null;
+  private interludeGain:GainNode|null=null;
+  private interludeWanted=false;
+  // Snax's "Bumbersnax" track plays from the moment the wheel reveals a winner
+  // until the host closes the wheel.
+  private winnerBuffer:AudioBuffer|null=null;
+  private winnerSource:AudioBufferSourceNode|null=null;
+  private winnerGain:GainNode|null=null;
   private enabled:(value:boolean)=>void;
   constructor(enabled:(value:boolean)=>void){this.enabled=enabled;}
   async unlock(){
@@ -66,18 +76,19 @@ export class WheelAudio {
       if(this.disposed)return;
       this.enabled(this.context.state==="running");
       this.schedule();
+      if(this.interludeWanted)this.interlude(true);
     }catch{this.enabled(false);}
   }
   private preloadWow(){
     if(!this.loadingWow)this.loadingWow=(async()=>{
       try{
-        await Promise.all(["wow","drumroll"].map(async kind=>{
-          const response=await fetch(kind==="drumroll"?"/snax-wheel-drumroll-v2.mp3":"/snax-wheel-wow.mp3");
+        await Promise.all(["wow","drumroll","interlude","winner"].map(async kind=>{
+          const response=await fetch(kind==="drumroll"?"/snax-wheel-drumroll-v2.mp3":kind==="interlude"?"/interlude-suspense.mp3":kind==="winner"?"/snax-wheel-winner.mp3":"/snax-wheel-wow.mp3");
           if(!response.ok||this.disposed)return;
           const bytes=await response.arrayBuffer();
           if(!this.context||this.disposed)return;
           const buffer=await this.context.decodeAudioData(bytes);
-          if(kind==="wow")this.wowBuffer=buffer;else this.drumBuffer=buffer;
+          if(kind==="wow")this.wowBuffer=buffer;else if(kind==="winner")this.winnerBuffer=buffer;else if(kind==="interlude"){this.interludeBuffer=buffer;if(this.interludeWanted)this.interlude(true);}else this.drumBuffer=buffer;
         }));
       }catch{/* The built-in tiny wow remains available if the recording cannot load. */}
     })();
@@ -110,12 +121,42 @@ export class WheelAudio {
     source.start(0,Math.max(0,(now-wheel.startedAt)/1000));source.stop(ctx.currentTime+remaining/1000);this.drum=source;
     this.timer=setTimeout(()=>this.wow(wheel.id),remaining);
   }
+  // Suspense music under the "Up next" card: fades in when the card appears and
+  // fades out as the next video starts. Silent (never blocks) if audio is locked.
+  interlude(on:boolean){
+    this.interludeWanted=on;
+    const ctx=this.context;
+    if(this.disposed||!ctx)return;
+    if(on){
+      if(this.interludeSource||!this.interludeBuffer||ctx.state!=="running")return;
+      const source=ctx.createBufferSource(),gain=ctx.createGain();
+      source.buffer=this.interludeBuffer;source.loop=true;
+      gain.gain.setValueAtTime(0,ctx.currentTime);gain.gain.linearRampToValueAtTime(.55,ctx.currentTime+.6);
+      source.connect(gain);gain.connect(ctx.destination);source.start();
+      this.interludeSource=source;this.interludeGain=gain;
+      return;
+    }
+    this.stopInterlude(.8);
+  }
+  private stopInterlude(fade=0){
+    const source=this.interludeSource,gain=this.interludeGain,ctx=this.context;
+    this.interludeSource=null;this.interludeGain=null;
+    if(!source)return;
+    try{
+      if(ctx&&gain&&fade>0){gain.gain.cancelScheduledValues(ctx.currentTime);gain.gain.setValueAtTime(gain.gain.value,ctx.currentTime);gain.gain.linearRampToValueAtTime(0,ctx.currentTime+fade);source.stop(ctx.currentTime+fade+.05);}
+      else source.stop();
+    }catch{try{source.stop();}catch{}}
+  }
   // The rendered wheel can end the roll immediately, even after a delayed poll.
   land(id:string){this.wow(id);}
   private wow(id:string){
     if(this.disposed||this.wheel?.id!==id||this.heard.has(id)||this.scheduled!==id)return;
     this.heard.add(id);clearTimeout(this.timer);try{this.drum?.stop();}catch{}this.drum=null;
     const ctx=this.context;
+    if(ctx&&this.winnerBuffer&&!this.winnerSource){
+      const source=ctx.createBufferSource(),gain=ctx.createGain();source.buffer=this.winnerBuffer;gain.gain.value=.7;
+      source.connect(gain);gain.connect(ctx.destination);source.start();this.winnerSource=source;this.winnerGain=gain;
+    }
     if(ctx){
       const samples=cymbalSamples(),buffer=ctx.createBuffer(1,samples.length,22050);buffer.copyToChannel(samples,0);
       const source=ctx.createBufferSource(),gain=ctx.createGain();source.buffer=buffer;gain.gain.value=.75;
@@ -146,6 +187,11 @@ export class WheelAudio {
       gain.gain.setValueAtTime(0,ctx.currentTime);gain.gain.linearRampToValueAtTime(.025,ctx.currentTime+delay+.15);gain.gain.exponentialRampToValueAtTime(.001,ctx.currentTime+delay+2.2);tone.connect(gain);gain.connect(ctx.destination);tone.start(ctx.currentTime+delay);tone.stop(ctx.currentTime+delay+2.25);
     }
   }
-  private stop(){clearTimeout(this.timer);try{this.drum?.stop();}catch{}try{this.wowSource?.stop();}catch{}try{this.cymbal?.stop();}catch{}this.drum=null;this.wowSource=null;this.cymbal=null;this.scheduled=null;if(this.speaking&&"speechSynthesis" in window){window.speechSynthesis.cancel();this.speaking=false;}}
-  dispose(){this.disposed=true;this.stop();if(this.context)this.context.onstatechange=null;void this.context?.close();}
+  private stopWinner(){
+    const source=this.winnerSource,gain=this.winnerGain,ctx=this.context;this.winnerSource=null;this.winnerGain=null;
+    if(!source)return;
+    try{if(ctx&&gain){gain.gain.cancelScheduledValues(ctx.currentTime);gain.gain.setValueAtTime(gain.gain.value,ctx.currentTime);gain.gain.linearRampToValueAtTime(0,ctx.currentTime+.6);source.stop(ctx.currentTime+.65);}else source.stop();}catch{try{source.stop();}catch{}}
+  }
+  private stop(){this.stopWinner();clearTimeout(this.timer);try{this.drum?.stop();}catch{}try{this.wowSource?.stop();}catch{}try{this.cymbal?.stop();}catch{}this.drum=null;this.wowSource=null;this.cymbal=null;this.scheduled=null;if(this.speaking&&"speechSynthesis" in window){window.speechSynthesis.cancel();this.speaking=false;}}
+  dispose(){this.disposed=true;this.stop();this.stopInterlude();if(this.context)this.context.onstatechange=null;void this.context?.close();}
 }

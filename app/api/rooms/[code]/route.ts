@@ -1,6 +1,7 @@
 import { env } from "cloudflare:workers";
 import { hostTokenMatches } from "../shared-host";
 import { readWheel,openWheel,spinWheel,closeWheel,finishInterruptedSong } from "../../../wheel-server";
+import { listPicks,pinnedIds,addPick,deletePick,movePick,snaxSingsNext } from "../../../snax-picks";
 
 type QueueRow = { id:number; singer_name:string; song_title:string; video_title:string; video_id:string; thumbnail_url:string; sort_order:number; status:"pending"|"playing"|"done"; started_at:string|null; sung_count?:number };
 
@@ -28,7 +29,7 @@ function requestsAreOpen(room:{requests_open:number;ends_at:string|null}) {
   return Number.isNaN(closesAt) || Date.now() < closesAt;
 }
 
-async function state(code:string) {
+async function state(code:string, host=false) {
   const db=dbBinding();
   // Finalize a landed wheel before reading the current singer and lineup.
   const wheel=await readWheel(db,code);
@@ -39,11 +40,13 @@ async function state(code:string) {
     db.prepare("SELECT q.id,q.singer_name,q.song_title,q.video_title,q.video_id,q.thumbnail_url,q.sort_order,q.status,q.started_at,COALESCE(s.sung_count,0) AS sung_count FROM queue_items q LEFT JOIN singer_stats s ON s.room_code=q.room_code AND s.singer_key=lower(trim(q.singer_name)) WHERE q.room_code=? AND q.status='pending' ORDER BY q.sort_order LIMIT 100").bind(code).all<QueueRow>(),
     db.prepare("SELECT code FROM current_room WHERE id=1").first<{code:string}>().catch(()=>null),
   ]);
-  return { code, playbackStatus:room.playback_status, requestsOpen:requestsAreOpen(room), requestsToggle:!!room.requests_open, endsAt:room.ends_at, cutoffMinutes:CUTOFF_MINUTES, isCurrent:current?.code===code, nowPlaying:now?queueItem(now):null, queue:waiting.results.map(queueItem), completedCount:Number(room.completed_count||0),wheel,serverNow:Date.now() };
+  return { code, playbackStatus:room.playback_status, requestsOpen:requestsAreOpen(room), requestsToggle:!!room.requests_open, endsAt:room.ends_at, cutoffMinutes:CUTOFF_MINUTES, isCurrent:current?.code===code, nowPlaying:now?queueItem(now):null, queue:waiting.results.map(queueItem), completedCount:Number(room.completed_count||0),wheel,serverNow:Date.now(),
+    // Host-only: Snax's private setlist and which lineup songs are pinned for her.
+    ...(host?{snaxPicks:await listPicks(db,code).catch(()=>[]),pinnedIds:await pinnedIds(db,code).catch(()=>[])}:{}) };
 }
 
 export async function GET(request:Request, context:{params:Promise<{code:string}>}) {
-  try { const code=codeOf((await context.params).code); const allowed=await verify(code,request,"host")||await verify(code,request,"invite")||await verify(code,request,"tv"); if(!allowed) return Response.json({error:"Use this room’s private link to enter."},{status:403}); const room=await state(code); if(!room) return Response.json({error:"That room has left the building."},{status:404}); return Response.json(room,{headers:{"cache-control":"no-store"}}); }
+  try { const code=codeOf((await context.params).code); const isHost=await verify(code,request,"host"); const allowed=isHost||await verify(code,request,"invite")||await verify(code,request,"tv"); if(!allowed) return Response.json({error:"Use this room’s private link to enter."},{status:403}); const room=await state(code,isHost); if(!room) return Response.json({error:"That room has left the building."},{status:404}); return Response.json(room,{headers:{"cache-control":"no-store"}}); }
   catch(error){ const message=error instanceof Error?error.message:"Couldn’t load the room."; return Response.json({error:message.includes("no such table")?"The room database is still setting up.":message},{status:500}); }
 }
 
@@ -67,20 +70,46 @@ export async function PATCH(request:Request, context:{params:Promise<{code:strin
   try {
     const code=codeOf((await context.params).code); const isHost=await verify(code,request,"host"); const isTv=isHost?false:await verify(code,request,"tv"); const isGuest=isHost||isTv?false:await verify(code,request,"invite");
     if(!isHost&&!isTv&&!isGuest) return Response.json({error:"This control needs a private room link."},{status:403});
-    const {action,itemId,requestsOpen,endsAt,inviteToken,tvToken,wheelId}=await request.json() as {action?:"play"|"pause"|"skip"|"complete"|"move_up"|"move_down"|"delete"|"set_requests"|"set_end_time"|"reset_event"|"claim_current"|"balance"|"clear_queue"|"wheel_open"|"wheel_spin"|"wheel_close";itemId?:number;requestsOpen?:boolean;endsAt?:string|null;inviteToken?:string;tvToken?:string;wheelId?:string};
+    const {action,itemId,requestsOpen,endsAt,inviteToken,tvToken,wheelId,pickId,song}=await request.json() as {action?:"play"|"pause"|"skip"|"complete"|"move_up"|"move_down"|"delete"|"set_requests"|"set_end_time"|"reset_event"|"claim_current"|"balance"|"clear_queue"|"wheel_open"|"wheel_spin"|"wheel_close"|"swap_video"|"pick_add"|"pick_delete"|"pick_up"|"pick_down"|"snax_next";itemId?:number;requestsOpen?:boolean;endsAt?:string|null;inviteToken?:string;tvToken?:string;wheelId?:string;pickId?:number;song?:{title?:string;videoId?:string;thumbnail?:string}};
     if(!action) return Response.json({error:"Unknown room control."},{status:400});
+    const respond=async(status=200)=>Response.json(await state(code,isHost),{status});
+
+    // Snax's private picks and the video swap work even while the wheel is up: they
+    // never change who is singing or the order of the lineup.
+    if(["swap_video","pick_add","pick_delete","pick_up","pick_down","snax_next"].includes(action)){
+      if(!isHost) return Response.json({error:"Only the host can do that."},{status:403});
+      const db=dbBinding();
+      try{
+        if(action==="pick_add"||action==="swap_video"){
+          const videoId=song?.videoId?.trim().slice(0,20)||""; const title=song?.title?.trim().slice(0,140)||""; const thumbnailUrl=song?.thumbnail?.trim().slice(0,600)||"";
+          if(!title||!/^[A-Za-z0-9_-]{6,20}$/.test(videoId)) return Response.json({error:"That song selection is missing a detail."},{status:400});
+          if(action==="pick_add") await addPick(db,code,{songTitle:title,videoTitle:title,videoId,thumbnailUrl});
+          else {
+            if(!itemId) return Response.json({error:"Choose a song to swap first."},{status:400});
+            // Keep the singer and their place in line; only the video changes. A swap
+            // on the song that's on the TV restarts it with the new video.
+            const result=await db.prepare("UPDATE queue_items SET song_title=?,video_title=?,video_id=?,thumbnail_url=?,started_at=CASE WHEN status='playing' THEN CURRENT_TIMESTAMP ELSE started_at END WHERE id=? AND room_code=? AND status IN ('pending','playing')").bind(title,title,videoId,thumbnailUrl,itemId,code).run();
+            if(!Number(result.meta?.changes||0)) return Response.json({error:"That song has already finished."},{status:409});
+          }
+        }
+        else if(action==="pick_delete"&&pickId) await deletePick(db,code,pickId);
+        else if((action==="pick_up"||action==="pick_down")&&pickId) await movePick(db,code,pickId,action==="pick_up"?"up":"down");
+        else if(action==="snax_next") await snaxSingsNext(db,code,pickId);
+        return respond();
+      }catch(error){ return Response.json({error:error instanceof Error?error.message:"Snax’s picks missed their cue."},{status:409}); }
+    }
     if(action==="wheel_open"||action==="wheel_spin"||action==="wheel_close"){
       if(!isHost)return Response.json({error:"Only a host can operate the wheel."},{status:403});
       try{
         if(action==="wheel_open")await openWheel(dbBinding(),code);
         else if(action==="wheel_spin")await spinWheel(dbBinding(),code,wheelId||"");
         else await closeWheel(dbBinding(),code,wheelId||"");
-        return Response.json(await state(code));
+        return respond();
       }catch(error){return Response.json({error:error instanceof Error?error.message:"The wheel missed its cue."},{status:409});}
     }
-    if(action==="complete"&&(isHost||isTv)&&itemId&&await finishInterruptedSong(dbBinding(),code,itemId))return Response.json(await state(code));
+    if(action==="complete"&&(isHost||isTv)&&itemId&&await finishInterruptedSong(dbBinding(),code,itemId))return respond();
     if(await readWheel(dbBinding(),code)){
-      if(action==="complete")return Response.json(await state(code));
+      if(action==="complete")return respond();
       if(!["set_requests","set_end_time"].includes(action))return Response.json({error:"Close the wheel before changing playback or the lineup."},{status:409});
     }
     if(["play","pause","skip","set_requests","set_end_time","reset_event","claim_current","balance","clear_queue","move_up","move_down","delete"].includes(action)&&!isHost) return Response.json({error:"Only the host can control the room."},{status:403});
@@ -93,7 +122,7 @@ export async function PATCH(request:Request, context:{params:Promise<{code:strin
       if(!row||!inviteToken||row.invite_token_hash!==await hash(inviteToken)) return Response.json({error:"That invite link doesn’t match this room."},{status:400});
       const tv = tvToken && row.tv_token_hash===await hash(tvToken) ? tvToken : null;
       await db0.prepare("INSERT INTO current_room (id, code, invite_token, tv_token, updated_at) VALUES (1, ?, ?, ?, CURRENT_TIMESTAMP) ON CONFLICT(id) DO UPDATE SET code = excluded.code, invite_token = excluded.invite_token, tv_token = excluded.tv_token, updated_at = CURRENT_TIMESTAMP").bind(code,inviteToken,tv).run();
-      return Response.json(await state(code));
+      return respond();
     }
 
     if(action==="set_requests") {
@@ -101,12 +130,12 @@ export async function PATCH(request:Request, context:{params:Promise<{code:strin
       // the stale last-call time instead of leaving requests silently closed.
       if(requestsOpen){ const row=await dbBinding().prepare("SELECT requests_open, ends_at FROM rooms WHERE code=?").bind(code).first<{requests_open:number;ends_at:string|null}>(); if(row&&row.ends_at&&!requestsAreOpen({requests_open:1,ends_at:row.ends_at})) await dbBinding().prepare("UPDATE rooms SET ends_at=NULL WHERE code=?").bind(code).run(); }
       await dbBinding().prepare("UPDATE rooms SET requests_open=? WHERE code=?").bind(requestsOpen?1:0,code).run();
-      return Response.json(await state(code));
+      return respond();
     }
     if(action==="set_end_time") {
       const value = endsAt && !Number.isNaN(Date.parse(endsAt)) ? new Date(endsAt).toISOString() : null;
       await dbBinding().prepare("UPDATE rooms SET ends_at=? WHERE code=?").bind(value,code).run();
-      return Response.json(await state(code));
+      return respond();
     }
     if(action==="reset_event") {
       const db2=dbBinding();
@@ -115,12 +144,12 @@ export async function PATCH(request:Request, context:{params:Promise<{code:strin
         db2.prepare("UPDATE rooms SET playback_status='idle', requests_open=1, ends_at=NULL, completed_count=0 WHERE code=?").bind(code),
         db2.prepare("DELETE FROM singer_stats WHERE room_code=?").bind(code),
       ]);
-      return Response.json(await state(code));
+      return respond();
     }
 
     if(action==="clear_queue") {
       await dbBinding().prepare("DELETE FROM queue_items WHERE room_code=? AND status='pending'").bind(code).run();
-      return Response.json(await state(code));
+      return respond();
     }
 
     if(action==="balance") {
@@ -131,10 +160,13 @@ export async function PATCH(request:Request, context:{params:Promise<{code:strin
       const pending=await db3.prepare("SELECT q.id,q.singer_name,COALESCE(s.sung_count,0) AS sung_count FROM queue_items q LEFT JOIN singer_stats s ON s.room_code=q.room_code AND s.singer_key=lower(trim(q.singer_name)) WHERE q.room_code=? AND q.status='pending' ORDER BY q.id").bind(code).all<{id:number;singer_name:string;sung_count:number}>();
       const bySinger=new Map<string,{sung:number;first:number;items:number[]}>();
       for(const row of pending.results){ const key=row.singer_name.trim().toLowerCase(); const entry=bySinger.get(key)||{sung:row.sung_count,first:row.id,items:[]}; entry.items.push(row.id); bySinger.set(key,entry); }
-      const ordered:number[]=[]; let round=0;
+      const pinned=await pinnedIds(db3,code).catch(()=>[] as number[]); const pinnedSet=new Set(pinned);
+      for(const [key,entry] of bySinger){ entry.items=entry.items.filter(id=>!pinnedSet.has(id)); if(!entry.items.length) bySinger.delete(key); }
+      // Snax's pinned song stays right after the current one.
+      const ordered:number[]=[...pinned]; let round=0;
       while(true){ const turn=[...bySinger.values()].filter(e=>e.items.length>round).sort((a,b)=>(a.sung+round)-(b.sung+round)||a.first-b.first); if(!turn.length) break; for(const e of turn) ordered.push(e.items[round]); round+=1; }
       if(ordered.length) await db3.batch(ordered.map((id,index)=>db3.prepare("UPDATE queue_items SET sort_order=? WHERE id=? AND room_code=?").bind(index+1,id,code)));
-      return Response.json(await state(code));
+      return respond();
     }
 
     if(action==="complete"&&!isTv&&!isHost) return Response.json({error:"Only the TV player can finish a song."},{status:403});
@@ -148,12 +180,12 @@ export async function PATCH(request:Request, context:{params:Promise<{code:strin
         const before=action==="move_up"; const neighbor=await db.prepare(`SELECT id,sort_order FROM queue_items WHERE room_code=? AND status='pending' AND sort_order ${before?"<":">"} ? ORDER BY sort_order ${before?"DESC":"ASC"} LIMIT 1`).bind(code,item.sort_order).first<{id:number;sort_order:number}>();
         if(neighbor) await db.batch([db.prepare("UPDATE queue_items SET sort_order=-1 WHERE id=?").bind(item.id),db.prepare("UPDATE queue_items SET sort_order=? WHERE id=?").bind(item.sort_order,neighbor.id),db.prepare("UPDATE queue_items SET sort_order=? WHERE id=?").bind(neighbor.sort_order,item.id)]);
       }
-      return Response.json(await state(code));
+      return respond();
     }
     const current=await db.prepare("SELECT id FROM queue_items WHERE room_code=? AND status='playing' ORDER BY sort_order LIMIT 1").bind(code).first<{id:number}>();
     // Ignore repeated or delayed end events after the TV has moved on.
-    if(action==="complete"&&(!current||!itemId||itemId!==current.id)) return Response.json(await state(code));
-    if((action==="complete"||action==="skip")&&current){ if(itemId&&itemId!==current.id) return Response.json(await state(code));
+    if(action==="complete"&&(!current||!itemId||itemId!==current.id)) return respond();
+    if((action==="complete"||action==="skip")&&current){ if(itemId&&itemId!==current.id) return respond();
       // Privacy policy: a played or skipped selection is deleted immediately. Keep only a tally.
       const singer=await db.prepare("SELECT singer_name FROM queue_items WHERE id=?").bind(current.id).first<{singer_name:string}>();
       await db.batch([
@@ -175,6 +207,6 @@ export async function PATCH(request:Request, context:{params:Promise<{code:strin
       }
       else await db.prepare("UPDATE rooms SET playback_status='idle' WHERE code=?").bind(code).run();
     }
-    return Response.json(await state(code));
+    return respond();
   } catch(error){ return Response.json({error:error instanceof Error?error.message:"The controls missed their cue."},{status:500}); }
 }

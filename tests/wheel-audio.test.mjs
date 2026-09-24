@@ -60,14 +60,15 @@ test('reopening a finished result is silent and closing cancels a pending reveal
 });
 test('the combined recording replaces browser speech and follows the cymbal once',async t=>{
   const {spoken,sources,restore}=audioFixture(t);const audio=new WheelAudio(()=>{});t.after(()=>{audio.dispose();restore();});
-  t.mock.method(globalThis,'fetch',async url=>{assert.match(url,/^\/snax-wheel-(wow|drumroll-v2)\.mp3$/);return {ok:true,arrayBuffer:async()=>new Uint8Array([url.includes('wow')?1:2]).buffer};});
+  t.mock.method(globalThis,'fetch',async url=>{assert.match(url,/^\/(snax-wheel-(wow|drumroll-v2|winner)|interlude-suspense)\.mp3$/);return {ok:true,arrayBuffer:async()=>new Uint8Array([url.includes('wow')?1:url.includes('drumroll')?2:url.includes('winner')?3:4]).buffer};});
   await audio.unlock();for(let i=0;i<6;i++)await Promise.resolve();audio.sync(wheel,1000);
   assert.equal(sources.length,1);assert.equal(sources[0].buffer.recordedDrum,true);t.mock.timers.tick(7000);
-  assert.equal(sources.length,2);assert.equal(sources[1].buffer.recordedWow,undefined);
+  // Landing: the Bumbersnax winner track starts, then the cymbal.
+  assert.equal(sources.length,3);assert.equal(sources[1].buffer.recordedWow,false);assert.equal(sources[1].buffer.recordedDrum,false);assert.equal(sources[2].buffer.recordedWow,undefined);
   audio.sync({...wheel,phase:'winner'},8000);t.mock.timers.tick(CYMBAL_DURATION*1000);
-  assert.equal(sources.length,3);assert.equal(sources[2].buffer.recordedWow,true);assert.equal(spoken.length,0);
-  audio.sync({...wheel,phase:'winner'},8650);assert.equal(sources.length,3);
-  audio.sync(null,8650);assert.equal(sources[2].stopped,true);
+  assert.equal(sources.length,4);assert.equal(sources[3].buffer.recordedWow,true);assert.equal(spoken.length,0);
+  audio.sync({...wheel,phase:'winner'},8650);assert.equal(sources.length,4);
+  audio.sync(null,8650);assert.equal(sources[3].stopped,true);assert.equal(sources[1].stopped,true);
 });
 test('closing during the cymbal cancels the subsequent wow',async t=>{
   const {spoken,sources,restore}=audioFixture(t);const audio=new WheelAudio(()=>{});t.after(()=>{audio.dispose();restore();});

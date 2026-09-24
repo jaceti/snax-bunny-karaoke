@@ -1,4 +1,5 @@
 import { env } from "cloudflare:workers";
+import { hostTokenMatches } from "../rooms/shared-host";
 import { karaokeScore, karaokeEligible, playable, type VideoDetails } from "./ranking";
 
 type YouTubeSearchItem = { id?: { videoId?: string }; snippet?: { title?: string; channelTitle?: string; thumbnails?: { medium?: { url?: string }; default?: { url?: string } } } };
@@ -22,8 +23,11 @@ export async function GET(request: Request) {
 
     const roomCode = (request.headers.get("x-room-code") || "").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 6);
     const invite = request.headers.get("x-room-invite") || "";
-    const room = await db.prepare("SELECT invite_token_hash FROM rooms WHERE code = ?").bind(roomCode).first<{ invite_token_hash: string }>();
-    if (!room || !invite || room.invite_token_hash !== await sha256(invite)) return Response.json({ error: "Scan the room QR code before searching." }, { status: 403 });
+    const hostToken = request.headers.get("x-host-token") || "";
+    const room = await db.prepare("SELECT invite_token_hash, host_token_hash FROM rooms WHERE code = ?").bind(roomCode).first<{ invite_token_hash: string; host_token_hash: string }>();
+    // Guests search with the room invite; the host console (swaps, Snax's picks) may use its host key.
+    const allowed = !!room && ((!!invite && room.invite_token_hash === await sha256(invite)) || await hostTokenMatches(roomCode, room.host_token_hash, hostToken));
+    if (!allowed) return Response.json({ error: "Scan the room QR code before searching." }, { status: 403 });
 
     const url = new URL(request.url);
     const q = url.searchParams.get("q")?.trim().slice(0, 100) || "";

@@ -45,6 +45,8 @@ export class TvPlayback {
   update(song: TvSong | null, status: PlaybackStatus, wheelOpen = false) {
     if (this.disposed) return;
     const changed = song?.id !== this.song?.id;
+    // The host swapped a dud video for the same singer: reload in place, no interlude.
+    const swapped = !changed && !!song && !!this.song && song.videoId !== this.song.videoId;
     const statusChanged = status !== this.status;
     const wheelChanged = wheelOpen !== this.wheelOpen;
     this.wheelOpen = wheelOpen;
@@ -68,7 +70,14 @@ export class TvPlayback {
         this.sync();
       }, 10_000);
     }
-    if (changed || statusChanged || wheelChanged) this.sync();
+    if (swapped) {
+      clearTimeout(this.retry);
+      this.finishing = null;
+      this.started = false;
+      this.loaded = null;
+      this.player?.pauseVideo();
+    }
+    if (changed || swapped || statusChanged || wheelChanged) this.sync();
   }
 
   private sync() {

@@ -11,7 +11,9 @@ import { WheelAudio } from "./wheel-audio";
 
 type Song={videoId:string;title:string;channel:string;thumbnail:string};
 type QueueItem={id:number;singerName:string;songTitle:string;videoTitle:string;videoId:string;thumbnailUrl:string;sortOrder:number;status:"pending"|"playing"|"done";startedAt:string|null;sungCount?:number};
-type RoomState={code:string;playbackStatus:"idle"|"playing"|"paused";requestsOpen:boolean;requestsToggle:boolean;endsAt:string|null;cutoffMinutes:number;isCurrent?:boolean;nowPlaying:QueueItem|null;queue:QueueItem[];completedCount:number;wheel:WheelState|null;serverNow:number};
+type SnaxPick={id:number;songTitle:string;videoTitle:string;videoId:string;thumbnailUrl:string};
+type PickerMode={mode:"swap";item:QueueItem}|{mode:"pick"};
+type RoomState={snaxPicks?:SnaxPick[];pinnedIds?:number[];code:string;playbackStatus:"idle"|"playing"|"paused";requestsOpen:boolean;requestsToggle:boolean;endsAt:string|null;cutoffMinutes:number;isCurrent?:boolean;nowPlaying:QueueItem|null;queue:QueueItem[];completedCount:number;wheel:WheelState|null;serverNow:number};
 type Screen="landing"|"name"|"singer"|"host"|"tv";
 type Player=TvPlayer;
 
@@ -48,6 +50,8 @@ export default function Home(){
   // Local paging through one search's results — never triggers another YouTube call.
   const PAGE_SIZE=12; const [shown,setShown]=useState(PAGE_SIZE);
   const [consent,setConsent]=useState(false);
+  // Host console song picker: swap a dud video, or add to Snax's private picks.
+  const [picker,setPicker]=useState<PickerMode|null>(null);
   const [endsAtInput,setEndsAtInput]=useState(""); const endsAtFocused=useRef(false);
   // Keep the last-call box in sync with the room (shown in the host's local time).
   useEffect(()=>{ if(endsAtFocused.current) return; if(!room?.endsAt){ setEndsAtInput(""); return; } const d=new Date(room.endsAt); if(Number.isNaN(d.getTime())) return; setEndsAtInput(`${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`); },[room?.endsAt]);
@@ -209,8 +213,8 @@ export default function Home(){
 
   async function setEvent(body:Record<string,unknown>){
     setBusy(true);
-    try{const response=await fetch(`/api/rooms/${codeRef.current}`,{method:"PATCH",headers:{"content-type":"application/json",...headersFor("host")},body:JSON.stringify(body)});const data=await response.json() as RoomState&{error?:string};if(!response.ok)throw new Error(data.error||"That setting didn’t stick.");setRoom(data);}
-    catch(error){setNotice(messageOf(error));}finally{setBusy(false);}
+    try{const response=await fetch(`/api/rooms/${codeRef.current}`,{method:"PATCH",headers:{"content-type":"application/json",...headersFor("host")},body:JSON.stringify(body)});const data=await response.json() as RoomState&{error?:string};if(!response.ok)throw new Error(data.error||"That setting didn’t stick.");setRoom(data);return true;}
+    catch(error){setNotice(messageOf(error));return false;}finally{setBusy(false);}
   }
 
   async function runSearch(term:string){
@@ -231,6 +235,21 @@ export default function Home(){
     setBusy(true);setNotice("");
     try{const response=await fetch(`/api/rooms/${roomCode}`,{method:"POST",headers:{"content-type":"application/json","x-room-invite":inviteRef.current},body:JSON.stringify({singerName:identity.name,songTitle:song.title,videoTitle:song.title,videoId:song.videoId,thumbnailUrl:song.thumbnail})});const data=await response.json() as RoomState&{error?:string};if(!response.ok)throw new Error(data.error||"That song missed the queue.");setRoom(data);setResults([]);setShown(PAGE_SIZE);setQuery("");setNotice("Your song is in the lineup!");}
     catch(error){setNotice(messageOf(error));}finally{setBusy(false);}
+  }
+
+  // Host-side search (swap + Snax's picks). Uses the host key, so it works even
+  // when this phone never scanned the singer QR.
+  async function hostSearch(term:string):Promise<Song[]>{
+    const response=await fetch(`/api/search?q=${encodeURIComponent(term)}`,{headers:{"x-room-code":codeRef.current,...headersFor("host"),...(inviteRef.current?{"x-room-invite":inviteRef.current}:{})}});
+    const data=await response.json() as {results?:Song[];error?:string};
+    if(!response.ok)throw new Error(data.error||"Search took a mic break.");
+    return data.results||[];
+  }
+  async function hostPick(song:Song){
+    if(!picker)return;
+    const target=picker; setPicker(null);
+    if(target.mode==="swap"){ if(await setEvent({action:"swap_video",itemId:target.item.id,song})) setNotice(`Swapped ${target.item.singerName}’s video.`); }
+    else { if(await setEvent({action:"pick_add",song})) setNotice("Added to Snax’s picks."); }
   }
 
   useEffect(()=>{
@@ -263,6 +282,8 @@ export default function Home(){
   },[]);
   useEffect(()=>{if(screen==="tv")void wheelAudioRef.current?.unlock();},[screen]);
   useEffect(()=>{wheelAudioRef.current?.sync(screen==="tv"?room?.wheel||null:null,room?.serverNow||Date.now());},[room,screen]);
+  // Music under the blue "Up next" card so the room isn't silent between singers.
+  useEffect(()=>{wheelAudioRef.current?.interlude(screen==="tv"&&interlude&&!!room?.nowPlaying&&!room?.wheel);},[screen,interlude,room?.nowPlaying,room?.wheel]);
 
   // Stop the TV locally at the same cutoff even if venue Wi-Fi drops at 3 AM.
   useEffect(()=>{
@@ -347,10 +368,11 @@ export default function Home(){
     {screen==="host"&&<section className="host-stage"><header className="app-header"><button className="wordmark" onClick={home}>SNAX</button><div className="host-room">Host console · Room <strong>{roomCode}</strong></div></header>
       {room?.isCurrent===false&&<div className="requests-closed">This is an older room. The TV and singer QR may be using tonight’s room. <button onClick={()=>void resumeOrCreateRoom()} disabled={busy}>Connect to tonight’s room</button></div>}
       {!canHost&&<div className="requests-closed">Host controls aren’t connected yet. <button onClick={()=>void resumeOrCreateRoom()} disabled={busy}>Enable host controls</button></div>}
-      <div className="host-grid"><section className="host-controls"><p className="eyebrow">Playback</p><h1>{room?.nowPlaying?room.nowPlaying.singerName:"Ready when you are"}</h1>{room?.nowPlaying&&<p className="current-song">{room.nowPlaying.songTitle}</p>}<div className="control-row"><button className="play-control" onClick={()=>void control(room?.playbackStatus==="playing"?"pause":"play")} disabled={!canHost||busy||!!room?.wheel||(!room?.nowPlaying&&!room?.queue.length)}>{room?.playbackStatus==="playing"?"Pause":"Play"} <span>{room?.playbackStatus==="playing"?"Ⅱ":"▶"}</span></button><button onClick={()=>void control("skip",room?.nowPlaying?.id)} disabled={!canHost||busy||!!room?.wheel||!room?.nowPlaying}>Skip <span>→</span></button></div>
+      <div className="host-grid"><section className="host-controls"><p className="eyebrow">Playback</p><h1>{room?.nowPlaying?room.nowPlaying.singerName:"Ready when you are"}</h1>{room?.nowPlaying&&<p className="current-song">{room.nowPlaying.songTitle}</p>}<div className="control-row"><button className="play-control" onClick={()=>void control(room?.playbackStatus==="playing"?"pause":"play")} disabled={!canHost||busy||!!room?.wheel||(!room?.nowPlaying&&!room?.queue.length)}>{room?.playbackStatus==="playing"?"Pause":"Play"} <span>{room?.playbackStatus==="playing"?"Ⅱ":"▶"}</span></button><button onClick={()=>void control("skip",room?.nowPlaying?.id)} disabled={!canHost||busy||!!room?.wheel||!room?.nowPlaying}>Skip <span>→</span></button><button className="swap-control" onClick={()=>room?.nowPlaying&&setPicker({mode:"swap",item:room.nowPlaying})} disabled={!canHost||busy||!room?.nowPlaying}>Swap video <span>⇄</span></button></div>
       <div className="host-wheel-controls"><button className="wheel-open-button" disabled={!canHost||busy||!!room?.wheel||!room?.queue.length} onClick={()=>void setEvent({action:"wheel_open"})}>Wheel <span>✷</span></button>
       {room?.wheel&&<div className="host-wheel-panel"><strong>{room.wheel.phase==="ready"?"Wheel is on the TV":room.wheel.phase==="spinning"?"Spinning…":`${room.wheel.entries[room.wheel.winnerIndex!]?.name} is now singing!`}</strong><div><button disabled={!canHost||busy||room.wheel.phase!=="ready"} onClick={()=>void setEvent({action:"wheel_spin",wheelId:room.wheel?.id})}>Spin ↻</button><button disabled={!canHost||busy||room.wheel.phase==="spinning"} onClick={()=>void setEvent({action:"wheel_close",wheelId:room.wheel?.id})}>{room.wheel.phase==="winner"?"Play winner →":"Close wheel"}</button></div><small>Playback pauses for the wheel. The winner sings now; the interrupted song goes after unless more than half has already played.</small></div>}</div>
-      </section><QueuePanel room={room} busy={!canHost||busy||!!room?.wheel} onControl={control} host/><section className="host-night">
+      <SnaxPicksPanel room={room} busy={!canHost||busy} onNext={()=>void setEvent({action:"snax_next"})} onAdd={()=>setPicker({mode:"pick"})} onPick={(action,pickId)=>void setEvent({action,pickId})}/>
+      </section><QueuePanel room={room} busy={!canHost||busy||!!room?.wheel} onControl={control} onSwap={item=>setPicker({mode:"swap",item})} host/><section className="host-night">
       <div className="event-controls">
         <h2>Run the night</h2>
         <label className="event-toggle"><input type="checkbox" checked={!!room?.requestsToggle} disabled={!canHost||busy} onChange={event=>void setEvent({action:"set_requests",requestsOpen:event.target.checked})}/><span>{room?.requestsOpen?"Song requests are open":room?.requestsToggle?"Requests closed — past last call":"Song requests are closed"}</span></label>
@@ -372,7 +394,9 @@ export default function Home(){
         <div><p className="eyebrow">Share host controls</p><h2>Scan to host</h2><p>Anyone who scans this can control this room’s playback and lineup. Keep it off the public TV.</p><button type="button" onClick={()=>void copyHostLink()}>Copy host link</button><small>Room {roomCode} · Same code for this room</small></div>
         <QRCodeSVG value={hostShareUrl} size={220} level="M" marginSize={4} bgColor="#ffffff" fgColor="#000000" title="Scan to control this karaoke room"/>
       </section>}
-      </section></div></section>}
+      </section></div>
+      {picker&&<HostSongPicker key={picker.mode==="swap"?`swap-${picker.item.id}`:"pick"} picker={picker} search={hostSearch} onPick={song=>void hostPick(song)} onClose={()=>setPicker(null)}/>}
+    </section>}
 
     {screen==="tv"&&<section className="tv-stage-full">
       <header className="tv-top">
@@ -431,4 +455,48 @@ function TipCard(){
   return <section className="tip-card"><p className="eyebrow">Venmo @{VENMO_HANDLE}</p><h2>Hot Tips for Snax</h2><div className="tip-amounts">{[5,10,20].map(value=><button key={value} type="button" className={amount===value?"selected":""} onClick={()=>setAmount(value)}>${value}</button>)}</div><button type="button" className="tip-go" onClick={()=>tip(amount)}>{amount?`Tip $${amount} on Venmo`:"Open Venmo"} <span>→</span></button></section>;
 }
 
-function QueuePanel({room,busy,onControl,host=false}:{room:RoomState|null;busy:boolean;host?:boolean;onControl:(action:"move_up"|"move_down"|"delete",id:number)=>Promise<unknown>}){return <section className={`queue-panel ${host?"host-queue":""}`}><div className="queue-title"><div><p className="eyebrow">The lineup</p><h2>Who’s next?</h2></div><span>{room?.queue.length||0} waiting</span></div>{room?.nowPlaying&&<div className="now-card"><span>Now singing</span><strong>{room.nowPlaying.singerName}</strong><small>{room.nowPlaying.songTitle}</small></div>}<ol>{(host?room?.queue:room?.queue.slice(0,4))?.map((item,index)=><li key={item.id}><span className="queue-position">{index+1}</span><div className="queue-copy"><strong>{item.singerName}{host&&(item.sungCount||0)>0&&<em className="turns">{item.sungCount===1?"sang once":`sang ${item.sungCount}×`}</em>}</strong><small>{item.songTitle}</small></div>{host&&<div className="queue-actions"><button onClick={()=>void onControl("move_up",item.id)} disabled={busy||index===0} aria-label="Move song up">↑</button><button onClick={()=>void onControl("move_down",item.id)} disabled={busy||index===(room?.queue.length||0)-1} aria-label="Move song down">↓</button><button onClick={()=>void onControl("delete",item.id)} disabled={busy} aria-label="Delete song">×</button></div>}</li>)}{!room?.queue.length&&<li className="empty-queue">No one’s waiting yet. The microphone is getting nervous.</li>}{!host&&(room?.queue.length||0)>4&&<li className="empty-queue">+{(room?.queue.length||0)-4} more after that</li>}</ol>{!host&&<TipCard/>}</section>}
+function QueuePanel({room,busy,onControl,onSwap,host=false}:{room:RoomState|null;busy:boolean;host?:boolean;onSwap?:(item:QueueItem)=>void;onControl:(action:"move_up"|"move_down"|"delete",id:number)=>Promise<unknown>}){return <section className={`queue-panel ${host?"host-queue":""}`}><div className="queue-title"><div><p className="eyebrow">The lineup</p><h2>Who’s next?</h2></div><span>{room?.queue.length||0} waiting</span></div>{room?.nowPlaying&&<div className="now-card"><span>Now singing</span><strong>{room.nowPlaying.singerName}</strong><small>{room.nowPlaying.songTitle}</small></div>}<ol>{(host?room?.queue:room?.queue.slice(0,4))?.map((item,index)=><li key={item.id}><span className="queue-position">{index+1}</span><div className="queue-copy"><strong>{item.singerName}{host&&room?.pinnedIds?.includes(item.id)&&<em className="turns snax-pin">Snax next</em>}{host&&(item.sungCount||0)>0&&<em className="turns">{item.sungCount===1?"sang once":`sang ${item.sungCount}×`}</em>}</strong><small>{item.songTitle}</small></div>{host&&<div className="queue-actions"><button className="queue-swap" onClick={()=>onSwap?.(item)} disabled={busy} aria-label="Swap video" title="Swap video">⇄</button><button onClick={()=>void onControl("move_up",item.id)} disabled={busy||index===0} aria-label="Move song up">↑</button><button onClick={()=>void onControl("move_down",item.id)} disabled={busy||index===(room?.queue.length||0)-1} aria-label="Move song down">↓</button><button onClick={()=>void onControl("delete",item.id)} disabled={busy} aria-label="Delete song">×</button></div>}</li>)}{!room?.queue.length&&<li className="empty-queue">No one’s waiting yet. The microphone is getting nervous.</li>}{!host&&(room?.queue.length||0)>4&&<li className="empty-queue">+{(room?.queue.length||0)-4} more after that</li>}</ol>{!host&&<TipCard/>}</section>}
+
+// Strip "karaoke version", brackets, channel noise etc. so the alternates search
+// looks for the song itself rather than the exact upload that was a dud.
+function songQuery(title:string){
+  return title.replace(/\([^)]*\)|\[[^\]]*\]/g," ").replace(/\b(karaoke|lyrics?|instrumental|version|backing( track)?|with|no|lead|guide|vocals?|official|video|hd|4k|in the style of|sing king|karafun|zoom|sunfly)\b/gi," ").replace(/[|\-–—_:~•]+/g," ").replace(/\s+/g," ").trim().slice(0,80);
+}
+
+function HostSongPicker({picker,search,onPick,onClose}:{picker:PickerMode;search:(term:string)=>Promise<Song[]>;onPick:(song:Song)=>void;onClose:()=>void}){
+  const swap=picker.mode==="swap"?picker.item:null;
+  const [query,setQuery]=useState(swap?songQuery(swap.songTitle):"");
+  const [results,setResults]=useState<Song[]>([]);
+  const [shown,setShown]=useState(8);
+  const [loading,setLoading]=useState(false);
+  const [error,setError]=useState("");
+  const run=useCallback(async(term:string)=>{
+    if(term.trim().length<2)return;
+    setLoading(true);setError("");
+    try{const found=(await search(term.trim())).filter(song=>song.videoId!==swap?.videoId);setResults(found);setShown(8);if(!found.length)setError("No other karaoke versions found. Try the artist name.");}
+    catch(err){setError(messageOf(err));}finally{setLoading(false);}
+  },[search,swap?.videoId]);
+  // Swaps open with alternates already loaded — one tap mid-show.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(()=>{if(swap)void run(songQuery(swap.songTitle));},[]);
+  useEffect(()=>{const esc=(event:KeyboardEvent)=>{if(event.key==="Escape")onClose();};window.addEventListener("keydown",esc);return()=>window.removeEventListener("keydown",esc);},[onClose]);
+  return <div className="host-picker-backdrop" role="dialog" aria-modal="true" aria-label={swap?"Swap video":"Add to Snax’s picks"} onClick={event=>{if(event.target===event.currentTarget)onClose();}}>
+    <section className="host-picker">
+      <header><div><p className="eyebrow">{swap?`Swap for ${swap.singerName}`:"Snax’s picks"}</p><h2>{swap?"Pick another version":"Add a Snax song"}</h2>{swap&&<small>Now: {swap.songTitle}</small>}</div><button type="button" className="host-picker-close" onClick={onClose} aria-label="Close">×</button></header>
+      <form className="song-search" onSubmit={event=>{event.preventDefault();void run(query);}}><label htmlFor="host-song">{swap?"Or search for something else":"Search a song or artist"}</label><div><input id="host-song" value={query} onChange={event=>setQuery(event.target.value)} autoFocus={!swap} placeholder="Robyn, Chappell Roan, ABBA…"/><button disabled={loading}>{loading?"Searching…":"Search"}</button></div></form>
+      {error&&<p className="host-picker-error">{error}</p>}
+      <div className="results host-picker-results">{results.slice(0,shown).map(song=><article key={song.videoId}><img src={song.thumbnail} alt=""/><div><strong><a href={`https://www.youtube.com/watch?v=${song.videoId}`} target="_blank" rel="noreferrer" title="Preview on YouTube">{song.title}</a></strong><small>{song.channel}</small><button type="button" onClick={()=>onPick(song)}>{swap?"Use this one ⇄":"Add to Snax’s picks +"}</button></div></article>)}</div>
+      {results.length>shown&&<button type="button" className="load-more" onClick={()=>setShown(count=>count+8)}>Show more ({results.length-shown} left) ↓</button>}
+    </section>
+  </div>;
+}
+
+function SnaxPicksPanel({room,busy,onNext,onAdd,onPick}:{room:RoomState|null;busy:boolean;onNext:()=>void;onAdd:()=>void;onPick:(action:"pick_up"|"pick_down"|"pick_delete",pickId:number)=>void}){
+  const picks=room?.snaxPicks||[]; const queued=(room?.pinnedIds?.length||0)>0;
+  return <section className="snax-picks" aria-label="Snax's picks">
+    <div className="snax-picks-head"><div><p className="eyebrow">Only you see this</p><h2>Snax’s picks</h2></div><button type="button" className="snax-add" onClick={onAdd} disabled={busy}>Add song +</button></div>
+    <button type="button" className={`snax-next ${queued?"snax-done":""}`} onClick={onNext} disabled={busy||queued||!picks.length}>{queued?"Snax is up next ✓":"Snax sings next"} <span>★</span></button>
+    <p className="snax-note">{queued?"Snax sings right after the current song. Balance and the wheel won’t move her.":picks.length?`Next up for Snax: ${picks[0].songTitle}`:"Add songs here ahead of time. Tap the button and Snax sings right after the current song."}</p>
+    {picks.length>0&&<ol>{picks.map((pick,index)=><li key={pick.id}><span className="queue-position">{index+1}</span><div className="queue-copy"><small>{pick.songTitle}</small></div><div className="queue-actions"><button onClick={()=>onPick("pick_up",pick.id)} disabled={busy||index===0} aria-label="Move pick up">↑</button><button onClick={()=>onPick("pick_down",pick.id)} disabled={busy||index===picks.length-1} aria-label="Move pick down">↓</button><button onClick={()=>onPick("pick_delete",pick.id)} disabled={busy} aria-label="Remove pick">×</button></div></li>)}</ol>}
+  </section>;
+}

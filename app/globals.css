@@ -145,3 +145,22 @@ footer nav a { color:inherit; font-size:12px; font-weight:800; letter-spacing:.0
 .host-share>div{flex:1;min-width:180px}.host-share h2{margin:0;font-family:Impact,sans-serif;font-size:36px;text-transform:uppercase}.host-share p{line-height:1.4}.host-share svg{flex:none;max-width:100%;height:auto}.host-share small{display:block;margin-top:12px;font-weight:700}.host-share button{padding:12px;border:2px solid var(--ink);background:var(--paper);font-weight:900;cursor:pointer}
 /* Compact host console. */
 .host-controls{padding-top:24px;padding-bottom:24px}.host-night{padding-top:24px}.host-controls h1{font-size:clamp(44px,5vw,76px);line-height:1}.host-controls .control-row{margin-top:22px}.host-queue{padding-top:24px}.host-controls .current-song{margin:16px 0;font-size:22px}@media(max-width:1000px){.host-night{grid-column:1;grid-row:auto}.host-controls{border-right:0}}
+/* Host console: swap video + Snax's picks */
+.control-row{flex-wrap:wrap}.control-row button{gap:14px}.control-row .swap-control{background:var(--snax-blue)}
+.queue-actions .queue-swap{background:var(--snax-blue)}
+.turns.snax-pin{background:var(--snax-blue)}
+.snax-picks{margin-top:24px;padding:18px;border:3px solid var(--ink);background:var(--paper);box-shadow:5px 5px 0 var(--ink);max-width:620px}
+.snax-picks-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}.snax-picks-head h2{margin:0;font-family:Impact,sans-serif;font-size:36px;line-height:.95;text-transform:uppercase}
+.snax-add{white-space:nowrap;font-size:13px;padding:8px 12px;border:2px solid var(--ink);background:#fff;font-weight:900;text-transform:uppercase;cursor:pointer}
+.snax-next{display:flex;justify-content:space-between;align-items:center;width:100%;margin-top:14px;padding:16px 18px;border:3px solid var(--ink);background:var(--pink);box-shadow:5px 5px 0 var(--ink);font-size:20px;font-weight:900;text-transform:uppercase;cursor:pointer}
+.snax-next:disabled{cursor:default}.snax-next:disabled:not(.snax-done){opacity:.65}.snax-next.snax-done{background:var(--paper);box-shadow:none;transform:translate(5px,5px)}.snax-note{margin:12px 0 0;font-size:13px;font-weight:750;line-height:1.35}
+.snax-picks ol{list-style:none;margin:12px 0 0;padding:0}.snax-picks li{display:grid;grid-template-columns:28px 1fr auto;align-items:center;gap:10px;padding:8px 0;border-top:2px solid var(--ink)}.snax-picks li small{font-weight:750}
+.host-picker-backdrop{position:fixed;inset:0;z-index:50;display:flex;align-items:flex-start;justify-content:center;padding:24px 16px;background:rgba(17,17,17,.55);overflow-y:auto}
+.host-picker{width:min(900px,100%);padding:24px;border:4px solid var(--ink);background:var(--paper);box-shadow:10px 10px 0 var(--ink)}
+.host-picker>header{display:flex;justify-content:space-between;gap:16px;margin-bottom:18px}.host-picker h2{margin:0;font-family:Impact,sans-serif;font-size:40px;line-height:.95;text-transform:uppercase}.host-picker header small{display:block;margin-top:6px;font-weight:700}
+.host-picker-close{width:44px;height:44px;flex:none;border:3px solid var(--ink);background:var(--pink);font-size:24px;font-weight:900;cursor:pointer}
+.host-picker-error{margin:14px 0 0;font-weight:800}.host-picker-results{margin-top:20px}
+/* Thumb-sized row buttons for the host; delete sits apart so a swap tap can't remove a singer. */
+.host-queue .queue-actions,.snax-picks .queue-actions{gap:8px}.host-queue .queue-actions button,.snax-picks .queue-actions button{width:44px;height:44px;font-size:18px}.host-queue .queue-actions button:last-child,.snax-picks .queue-actions button:last-child{margin-left:12px}
+@media(max-width:650px){.host-picker{padding:18px 14px}.host-picker h2{font-size:24px}.host-picker header small{font-size:12px}.control-row button{width:100%}.control-row .swap-control{margin-top:16px;background:var(--paper)}.host-queue li,.snax-picks li{grid-template-columns:32px 1fr}.host-queue .queue-actions,.snax-picks .queue-actions{grid-column:2;justify-content:flex-end}.host-queue .queue-copy small,.snax-picks .queue-copy small{white-space:normal}}
+.turns{white-space:nowrap}

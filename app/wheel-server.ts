@@ -1,3 +1,4 @@
+import { ensureSnaxSchema } from "./snax-picks.ts";
 import { wheelEntries,pickWheelWinner,wheelRotation,WHEEL_DURATION,type WheelState } from "./wheel-model.ts";
 const initialized=new WeakMap<D1Database,Promise<unknown>>();
 export async function ensureWheelSchema(db:D1Database){
@@ -26,7 +27,9 @@ export async function readWheel(db:D1Database,code:string,now=Date.now()):Promis
   return wheel;
 }
 async function entries(db:D1Database,code:string){
-  const rows=await db.prepare("SELECT id,singer_name,song_title FROM queue_items WHERE room_code=? AND status='pending' ORDER BY sort_order,id").bind(code).all<{id:number;singer_name:string;song_title:string}>();
+  // Snax's pinned "sings next" song is already scheduled, so it never goes on the wheel.
+  await ensureSnaxSchema(db);
+  const rows=await db.prepare("SELECT id,singer_name,song_title FROM queue_items WHERE room_code=? AND status='pending' AND id NOT IN (SELECT queue_id FROM snax_pins WHERE room_code=?) ORDER BY sort_order,id").bind(code,code).all<{id:number;singer_name:string;song_title:string}>();
   return wheelEntries(rows.results);
 }
 export async function openWheel(db:D1Database,code:string){
