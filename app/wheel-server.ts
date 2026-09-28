@@ -1,7 +1,9 @@
 import { ensureSnaxSchema } from "./snax-picks.ts";
+import { ensureRotationSchema,previousSinger,eligibleSingers,rememberSingerStatement } from "./singer-rotation.ts";
 import { wheelEntries,pickWheelWinner,wheelRotation,WHEEL_DURATION,type WheelState,type WheelTheme } from "./wheel-model.ts";
 const initialized=new WeakMap<D1Database,Promise<unknown>>();
 export async function ensureWheelSchema(db:D1Database){
+  await ensureRotationSchema(db);
   let promise=initialized.get(db);
   if(!promise){promise=db.prepare("CREATE TABLE IF NOT EXISTS room_wheel (room_code TEXT PRIMARY KEY,state TEXT NOT NULL,resume_playback INTEGER NOT NULL DEFAULT 0)").run();initialized.set(db,promise);promise.catch(()=>initialized.delete(db));}
   await promise;
@@ -29,8 +31,11 @@ export async function readWheel(db:D1Database,code:string,now=Date.now()):Promis
 async function entries(db:D1Database,code:string){
   // Snax's pinned "sings next" song is already scheduled, so it never goes on the wheel.
   await ensureSnaxSchema(db);
-  const rows=await db.prepare("SELECT id,singer_name,song_title FROM queue_items WHERE room_code=? AND status='pending' AND id NOT IN (SELECT queue_id FROM snax_pins WHERE room_code=?) ORDER BY sort_order,id").bind(code,code).all<{id:number;singer_name:string;song_title:string}>();
-  return wheelEntries(rows.results);
+  const rows=await db.prepare("SELECT q.id,q.singer_name,q.song_title,EXISTS(SELECT 1 FROM snax_pins p WHERE p.room_code=q.room_code AND p.queue_id=q.id) AS pinned FROM queue_items q WHERE q.room_code=? AND q.status='pending' ORDER BY q.sort_order,q.id").bind(code).all<{id:number;singer_name:string;song_title:string;pinned:number}>();
+  const eligible=eligibleSingers(rows.results,await previousSinger(db,code));
+  const unpinned=eligible.filter(row=>!row.pinned);
+  // The no-repeat rule wins if a pinned singer is the only alternative.
+  return wheelEntries(unpinned.length?unpinned:eligible);
 }
 export async function openWheel(db:D1Database,code:string,theme:WheelTheme="classic"){
   await ensureWheelSchema(db);
@@ -62,6 +67,7 @@ export async function finishInterruptedSong(db:D1Database,code:string,itemId:num
   // ENDED can arrive just after the host pauses/opens the wheel, or after the
   // landing moved this item back to pending. Count it once and never replay it.
   await db.batch([
+    rememberSingerStatement(db,code,itemId),
     db.prepare("INSERT INTO singer_stats (room_code,singer_key,sung_count,last_sung_at) SELECT room_code,lower(trim(singer_name)),1,CURRENT_TIMESTAMP FROM queue_items WHERE room_code=? AND id=? ON CONFLICT(room_code,singer_key) DO UPDATE SET sung_count=sung_count+1,last_sung_at=CURRENT_TIMESTAMP").bind(code,itemId),
     db.prepare("UPDATE rooms SET completed_count=completed_count+1 WHERE code=? AND EXISTS (SELECT 1 FROM queue_items WHERE room_code=? AND id=?)").bind(code,code,itemId),
     db.prepare("DELETE FROM queue_items WHERE room_code=? AND id=?").bind(code,itemId),

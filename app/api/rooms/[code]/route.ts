@@ -1,4 +1,5 @@
 import { env } from "cloudflare:workers";
+import { noRepeatOrder,previousSinger,nextQueuedSinger,rememberSingerStatement } from "../../../singer-rotation";
 import { hostTokenMatches } from "../shared-host";
 import { readWheel,openWheel,spinWheel,closeWheel,finishInterruptedSong } from "../../../wheel-server";
 import { listPicks,pinnedIds,addPick,deletePick,movePick,snaxSingsNext } from "../../../snax-picks";
@@ -37,10 +38,10 @@ async function state(code:string, host=false) {
   if(!room) return null;
   const [now,waiting,current]=await Promise.all([
     db.prepare("SELECT q.id,q.singer_name,q.song_title,q.video_title,q.video_id,q.thumbnail_url,q.sort_order,q.status,q.started_at,COALESCE(s.sung_count,0) AS sung_count FROM queue_items q LEFT JOIN singer_stats s ON s.room_code=q.room_code AND s.singer_key=lower(trim(q.singer_name)) WHERE q.room_code=? AND q.status='playing' ORDER BY q.sort_order LIMIT 1").bind(code).first<QueueRow>(),
-    db.prepare("SELECT q.id,q.singer_name,q.song_title,q.video_title,q.video_id,q.thumbnail_url,q.sort_order,q.status,q.started_at,COALESCE(s.sung_count,0) AS sung_count FROM queue_items q LEFT JOIN singer_stats s ON s.room_code=q.room_code AND s.singer_key=lower(trim(q.singer_name)) WHERE q.room_code=? AND q.status='pending' ORDER BY q.sort_order LIMIT 100").bind(code).all<QueueRow>(),
+    db.prepare("SELECT q.id,q.singer_name,q.song_title,q.video_title,q.video_id,q.thumbnail_url,q.sort_order,q.status,q.started_at,COALESCE(s.sung_count,0) AS sung_count FROM queue_items q LEFT JOIN singer_stats s ON s.room_code=q.room_code AND s.singer_key=lower(trim(q.singer_name)) WHERE q.room_code=? AND q.status='pending' ORDER BY q.sort_order,q.id").bind(code).all<QueueRow>(),
     db.prepare("SELECT code FROM current_room WHERE id=1").first<{code:string}>().catch(()=>null),
   ]);
-  return { code, playbackStatus:room.playback_status, requestsOpen:requestsAreOpen(room), requestsToggle:!!room.requests_open, endsAt:room.ends_at, cutoffMinutes:CUTOFF_MINUTES, isCurrent:current?.code===code, nowPlaying:now?queueItem(now):null, queue:waiting.results.map(queueItem), completedCount:Number(room.completed_count||0),wheel,serverNow:Date.now(),
+  return { code, playbackStatus:room.playback_status, requestsOpen:requestsAreOpen(room), requestsToggle:!!room.requests_open, endsAt:room.ends_at, cutoffMinutes:CUTOFF_MINUTES, isCurrent:current?.code===code, nowPlaying:now?queueItem(now):null, queue:noRepeatOrder(waiting.results,now?.singer_name||await previousSinger(db,code)).slice(0,100).map(queueItem), completedCount:Number(room.completed_count||0),wheel,serverNow:Date.now(),
     // Host-only: Snax's private setlist and which lineup songs are pinned for her.
     ...(host?{snaxPicks:await listPicks(db,code).catch(()=>[]),pinnedIds:await pinnedIds(db,code).catch(()=>[])}:{}) };
 }
@@ -144,6 +145,7 @@ export async function PATCH(request:Request, context:{params:Promise<{code:strin
         db2.prepare("DELETE FROM queue_items WHERE room_code=?").bind(code),
         db2.prepare("UPDATE rooms SET playback_status='idle', requests_open=1, ends_at=NULL, completed_count=0 WHERE code=?").bind(code),
         db2.prepare("DELETE FROM singer_stats WHERE room_code=?").bind(code),
+        db2.prepare("DELETE FROM room_rotation WHERE room_code=?").bind(code),
       ]);
       return respond();
     }
@@ -172,6 +174,7 @@ export async function PATCH(request:Request, context:{params:Promise<{code:strin
 
     if(action==="complete"&&!isTv&&!isHost) return Response.json({error:"Only the TV player can finish a song."},{status:403});
     const db=dbBinding();
+    await previousSinger(db,code); // Ensure last-singer memory before playback mutations.
     if(["delete","move_up","move_down"].includes(action)) {
       if(!itemId) return Response.json({error:"Choose a queued song first."},{status:400});
       const item=await db.prepare("SELECT id,sort_order FROM queue_items WHERE id=? AND room_code=? AND status='pending'").bind(itemId,code).first<{id:number;sort_order:number}>();
@@ -190,17 +193,18 @@ export async function PATCH(request:Request, context:{params:Promise<{code:strin
       // Privacy policy: a played or skipped selection is deleted immediately. Keep only a tally.
       const singer=await db.prepare("SELECT singer_name FROM queue_items WHERE id=?").bind(current.id).first<{singer_name:string}>();
       await db.batch([
+        rememberSingerStatement(db,code,current.id),
         db.prepare("DELETE FROM queue_items WHERE id=?").bind(current.id),
         db.prepare("UPDATE rooms SET completed_count=completed_count+1 WHERE code=?").bind(code),
         db.prepare("INSERT INTO singer_stats (room_code, singer_key, sung_count, last_sung_at) VALUES (?, ?, 1, CURRENT_TIMESTAMP) ON CONFLICT(room_code, singer_key) DO UPDATE SET sung_count=sung_count+1, last_sung_at=CURRENT_TIMESTAMP").bind(code,(singer?.singer_name||"").trim().toLowerCase()),
       ]); }
     if(action==="pause") await db.prepare("UPDATE rooms SET playback_status='paused' WHERE code=?").bind(code).run();
     if(action==="play") {
-      if(!current){ const next=await db.prepare("SELECT id FROM queue_items WHERE room_code=? AND status='pending' ORDER BY sort_order LIMIT 1").bind(code).first<{id:number}>(); if(next) await db.prepare("UPDATE queue_items SET status='playing',started_at=CURRENT_TIMESTAMP WHERE id=?").bind(next.id).run(); }
+      if(!current){ const next=await nextQueuedSinger(db,code); if(next) await db.prepare("UPDATE queue_items SET status='playing',started_at=CURRENT_TIMESTAMP WHERE id=?").bind(next.id).run(); }
       await db.prepare("UPDATE rooms SET playback_status='playing' WHERE code=?").bind(code).run();
     }
     if(action==="complete"||action==="skip") {
-      const next=await db.prepare("SELECT id FROM queue_items WHERE room_code=? AND status='pending' ORDER BY sort_order LIMIT 1").bind(code).first<{id:number}>();
+      const next=await nextQueuedSinger(db,code);
       if(next){
         await db.prepare("UPDATE queue_items SET status='playing',started_at=CURRENT_TIMESTAMP WHERE id=?").bind(next.id).run();
         // A host pause wins even when it arrives during the song transition.

@@ -31,8 +31,9 @@ export async function ensureDailyReset(db:D1Database,now=Date.now()){
     db.prepare(`DELETE FROM singer_stats WHERE room_code=${current} AND ${due}`).bind(night),
     db.prepare(`UPDATE rooms SET playback_status='idle',requests_open=1,ends_at=NULL,completed_count=0 WHERE code=${current} AND ${due}`).bind(night),
     db.prepare(`DELETE FROM room_wheel WHERE room_code=${current} AND ${due}`).bind(night),
+    db.prepare(`DELETE FROM room_rotation WHERE room_code=${current} AND ${due}`).bind(night),
     db.prepare("UPDATE daily_reset SET night=?,reset_at=? WHERE id=1 AND night < ?").bind(night,new Date(now).toISOString(),night),
   ]);
   checkedNight.set(db,night);
-  return Number(results[4]?.meta?.changes||0)>0;
+  return Number(results.at(-1)?.meta?.changes||0)>0;
 }

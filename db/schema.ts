@@ -66,3 +66,8 @@ export const roomWheel = sqliteTable("room_wheel", {
   state: text("state").notNull(),
   resumePlayback: integer("resume_playback").notNull().default(0),
 });
+
+export const roomRotation = sqliteTable("room_rotation", {
+  roomCode: text("room_code").primaryKey(),
+  lastSingerKey: text("last_singer_key").notNull(),
+});
