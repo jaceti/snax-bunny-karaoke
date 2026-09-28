@@ -1,5 +1,6 @@
 export type WheelEntry={name:string;songTitle:string;queueId:number|null;filler:boolean};
-export type WheelState={id:string;phase:"ready"|"spinning"|"winner";entries:WheelEntry[];winnerIndex:number|null;startedAt:number|null;endsAt:number|null;rotation:number;interruptedQueueId?:number|null};
+export type WheelTheme="classic"|"spooky";
+export type WheelState={id:string;theme?:WheelTheme;phase:"ready"|"spinning"|"winner";entries:WheelEntry[];winnerIndex:number|null;startedAt:number|null;endsAt:number|null;rotation:number;interruptedQueueId?:number|null};
 export const WHEEL_DURATION=7000;
 // Also covers wheels opened before the decorative slot was renamed.
 export function wheelEntryLabel(entry:WheelEntry){return entry.filler?"★":entry.name.toUpperCase();}

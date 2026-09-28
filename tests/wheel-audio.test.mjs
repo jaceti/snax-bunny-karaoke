@@ -60,7 +60,7 @@ test('reopening a finished result is silent and closing cancels a pending reveal
 });
 test('the combined recording replaces browser speech and follows the cymbal once',async t=>{
   const {spoken,sources,restore}=audioFixture(t);const audio=new WheelAudio(()=>{});t.after(()=>{audio.dispose();restore();});
-  t.mock.method(globalThis,'fetch',async url=>{assert.match(url,/^\/(snax-wheel-(wow|drumroll-v2|winner)|interlude-suspense)\.mp3$/);return {ok:true,arrayBuffer:async()=>new Uint8Array([url.includes('wow')?1:url.includes('drumroll')?2:url.includes('winner')?3:4]).buffer};});
+  t.mock.method(globalThis,'fetch',async url=>{assert.match(url,/^\/(snax-wheel-(wow|drumroll-v2|winner)|spooky-music\/interlude-\d{2})\.mp3$/);return {ok:true,arrayBuffer:async()=>new Uint8Array([url.includes('wow')?1:url.includes('drumroll')?2:url.includes('winner')?3:4]).buffer};});
   await audio.unlock();for(let i=0;i<6;i++)await Promise.resolve();audio.sync(wheel,1000);
   assert.equal(sources.length,1);assert.equal(sources[0].buffer.recordedDrum,true);t.mock.timers.tick(7000);
   // Landing: the Bumbersnax winner track starts, then the cymbal.
@@ -87,4 +87,14 @@ test('authoritative winner update stops audio even before the local timer fires'
   const {sources,restore}=audioFixture(t);const audio=new WheelAudio(()=>{});t.after(()=>{audio.dispose();restore();});
   audio.sync(wheel,1000);await audio.unlock();t.mock.timers.tick(6500);
   audio.sync({...wheel,phase:'winner'},8000);assert.equal(sources[0].stopped,true);assert.equal(sources.length,2);
+});
+
+test('spooky reveal uses supplied music while preserving cymbal/wow and stops on close',async t=>{
+  const {sources,restore}=audioFixture(t);const audio=new WheelAudio(()=>{});t.after(()=>{audio.dispose();restore();});
+  t.mock.method(globalThis,'fetch',async url=>({ok:true,arrayBuffer:async()=>new Uint8Array([url.includes('wow')?1:url.includes('drumroll')?2:url.includes('winner')?3:4]).buffer}));
+  audio.sync({...wheel,theme:'spooky'},1000);await audio.unlock();for(let i=0;i<12;i++)await Promise.resolve();
+  t.mock.timers.tick(7000);for(let i=0;i<12;i++)await Promise.resolve();
+  const music=sources.find(source=>source.loop);assert.ok(music);assert.equal(music.started,undefined);assert.ok(music.args);
+  audio.interlude(false,'one');assert.notEqual(music.stopped,true);
+  audio.sync(null,8000);assert.equal(music.stopped,true);
 });

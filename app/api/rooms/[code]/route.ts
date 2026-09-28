@@ -70,7 +70,7 @@ export async function PATCH(request:Request, context:{params:Promise<{code:strin
   try {
     const code=codeOf((await context.params).code); const isHost=await verify(code,request,"host"); const isTv=isHost?false:await verify(code,request,"tv"); const isGuest=isHost||isTv?false:await verify(code,request,"invite");
     if(!isHost&&!isTv&&!isGuest) return Response.json({error:"This control needs a private room link."},{status:403});
-    const {action,itemId,requestsOpen,endsAt,inviteToken,tvToken,wheelId,pickId,song}=await request.json() as {action?:"play"|"pause"|"skip"|"complete"|"move_up"|"move_down"|"delete"|"set_requests"|"set_end_time"|"reset_event"|"claim_current"|"balance"|"clear_queue"|"wheel_open"|"wheel_spin"|"wheel_close"|"swap_video"|"pick_add"|"pick_delete"|"pick_up"|"pick_down"|"snax_next";itemId?:number;requestsOpen?:boolean;endsAt?:string|null;inviteToken?:string;tvToken?:string;wheelId?:string;pickId?:number;song?:{title?:string;videoId?:string;thumbnail?:string}};
+    const {action,itemId,requestsOpen,endsAt,inviteToken,tvToken,wheelId,wheelTheme,pickId,song}=await request.json() as {action?:"play"|"pause"|"skip"|"complete"|"move_up"|"move_down"|"delete"|"set_requests"|"set_end_time"|"reset_event"|"claim_current"|"balance"|"clear_queue"|"wheel_open"|"wheel_spin"|"wheel_close"|"swap_video"|"pick_add"|"pick_delete"|"pick_up"|"pick_down"|"snax_next";itemId?:number;requestsOpen?:boolean;endsAt?:string|null;inviteToken?:string;tvToken?:string;wheelId?:string;wheelTheme?:"classic"|"spooky";pickId?:number;song?:{title?:string;videoId?:string;thumbnail?:string}};
     if(!action) return Response.json({error:"Unknown room control."},{status:400});
     const respond=async(status=200)=>Response.json(await state(code,isHost),{status});
 
@@ -101,7 +101,8 @@ export async function PATCH(request:Request, context:{params:Promise<{code:strin
     if(action==="wheel_open"||action==="wheel_spin"||action==="wheel_close"){
       if(!isHost)return Response.json({error:"Only a host can operate the wheel."},{status:403});
       try{
-        if(action==="wheel_open")await openWheel(dbBinding(),code);
+        if(wheelTheme!==undefined&&wheelTheme!=="classic"&&wheelTheme!=="spooky")return Response.json({error:"Unknown wheel style."},{status:400});
+        if(action==="wheel_open")await openWheel(dbBinding(),code,wheelTheme||"classic");
         else if(action==="wheel_spin")await spinWheel(dbBinding(),code,wheelId||"");
         else await closeWheel(dbBinding(),code,wheelId||"");
         return respond();

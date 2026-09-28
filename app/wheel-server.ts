@@ -1,5 +1,5 @@
 import { ensureSnaxSchema } from "./snax-picks.ts";
-import { wheelEntries,pickWheelWinner,wheelRotation,WHEEL_DURATION,type WheelState } from "./wheel-model.ts";
+import { wheelEntries,pickWheelWinner,wheelRotation,WHEEL_DURATION,type WheelState,type WheelTheme } from "./wheel-model.ts";
 const initialized=new WeakMap<D1Database,Promise<unknown>>();
 export async function ensureWheelSchema(db:D1Database){
   let promise=initialized.get(db);
@@ -32,12 +32,12 @@ async function entries(db:D1Database,code:string){
   const rows=await db.prepare("SELECT id,singer_name,song_title FROM queue_items WHERE room_code=? AND status='pending' AND id NOT IN (SELECT queue_id FROM snax_pins WHERE room_code=?) ORDER BY sort_order,id").bind(code,code).all<{id:number;singer_name:string;song_title:string}>();
   return wheelEntries(rows.results);
 }
-export async function openWheel(db:D1Database,code:string){
+export async function openWheel(db:D1Database,code:string,theme:WheelTheme="classic"){
   await ensureWheelSchema(db);
   if(await rawWheel(db,code))return;
   const roster=await entries(db,code);if(!roster.length)throw new Error("Add at least one singer to the lineup before opening the wheel.");
   const interrupted=await db.prepare("SELECT id FROM queue_items WHERE room_code=? AND status='playing' ORDER BY sort_order,id LIMIT 1").bind(code).first<{id:number}>();
-  const wheel:WheelState={id:crypto.randomUUID(),phase:"ready",entries:roster,winnerIndex:null,startedAt:null,endsAt:null,rotation:0,interruptedQueueId:interrupted?.id??null};
+  const wheel:WheelState={id:crypto.randomUUID(),theme,phase:"ready",entries:roster,winnerIndex:null,startedAt:null,endsAt:null,rotation:0,interruptedQueueId:interrupted?.id??null};
   await db.batch([
     db.prepare("INSERT OR IGNORE INTO room_wheel (room_code,state,resume_playback) SELECT code,?,CASE WHEN playback_status='playing' THEN 1 ELSE 0 END FROM rooms WHERE code=?").bind(JSON.stringify(wheel),code),
     db.prepare("UPDATE rooms SET playback_status='paused' WHERE code=? AND EXISTS (SELECT 1 FROM room_wheel WHERE room_code=?)").bind(code,code),

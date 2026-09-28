@@ -47,13 +47,13 @@ test('Snax appears once; the decorative slot is a non-winning star even on older
   for(let i=0;i<100;i++)assert.equal(pickWheelWinner(roster,()=>i),0);
 });
 
-test('landing makes the winner current and the interrupted singer next; closing plays the winner',async()=>{
-  const {sql,db}=fixture();await openWheel(db,'ROOM');
-  const ready=await readWheel(db,'ROOM');assert.equal(ready.phase,'ready');assert.equal(ready.entries.length,4);
+for(const theme of ['classic','spooky'])test(`${theme}: landing makes the winner current and the interrupted singer next; closing plays the winner`,async()=>{
+  const {sql,db}=fixture();await openWheel(db,'ROOM',theme);
+  const ready=await readWheel(db,'ROOM');assert.equal(ready.theme,theme);assert.equal(ready.phase,'ready');assert.equal(ready.entries.length,4);
   assert.equal(sql.prepare("SELECT playback_status FROM rooms WHERE code='ROOM'").get().playback_status,'paused');
   const time=Date.now();await spinWheel(db,'ROOM',ready.id,time);
   const spinning=await readWheel(db,'ROOM',time);const winner=spinning.entries[spinning.winnerIndex];
-  assert.equal(winner.filler,false);assert.equal(spinning.phase,'spinning');
+  assert.equal(spinning.theme,theme);assert.equal(winner.filler,false);assert.equal(spinning.phase,'spinning');
   assert.equal(sql.prepare("SELECT id FROM queue_items WHERE room_code='ROOM' AND status='pending' ORDER BY sort_order,id LIMIT 1").get().id,2);
   assert.notEqual(winner.queueId,5);assert.equal(sql.prepare("SELECT id FROM queue_items WHERE status='playing'").get().id,1);
   await assert.rejects(closeWheel(db,'ROOM',ready.id,time+1),/finish/);
