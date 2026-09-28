@@ -13,11 +13,15 @@ are bypassed. Drumroll/cymbal/wow timing is unchanged.
 
 ## Assets
 
-`public/spooky-music/manifest.json` maps each of the 27 source files supplied in
+`public/spooky-music/manifest.json` maps the 24 currently selected source files in
 Desktop/SpookyWheel/Music to a 14-second mono MP3 excerpt starting at 8 seconds,
 normalized to -20 LUFS. Only the current and next clip are decoded. The shuffled
 bag uses every track before repeating and avoids an adjacent repeat at rollover.
 Source files were not modified. Rebuild with `scripts/prepare-spooky-music.mjs`.
+The manifest is the shared source of truth for spooky winner reveals and
+between-song music. Jack's Lament, Teddybears Wolfman, and Remains of the Day
+were removed from playback to match the updated Desktop folder. Existing clip
+URLs stay stable; retired clips are retained as unused, recoverable assets.
 
 Creepster is self-hosted with its OFL license in `public/spooky-font-license.txt`.
 Skeleton and bat UI icons are SVG. The mascot is saved in

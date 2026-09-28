@@ -78,12 +78,6 @@
     "durationSeconds": 14
   },
   {
-    "file": "interlude-14.mp3",
-    "source": "Nightmare Before Christmas  -  Jack's Lament HQ.m4a",
-    "startSeconds": 8,
-    "durationSeconds": 14
-  },
-  {
     "file": "interlude-15.mp3",
     "source": "Overture - (The Nightmare Before Christmas).m4a",
     "startSeconds": 8,
@@ -120,12 +114,6 @@
     "durationSeconds": 14
   },
   {
-    "file": "interlude-21.mp3",
-    "source": "Teddybears Wolfman.m4a",
-    "startSeconds": 8,
-    "durationSeconds": 14
-  },
-  {
     "file": "interlude-22.mp3",
     "source": "The Corpse Bride Theme.m4a",
     "startSeconds": 8,
@@ -146,12 +134,6 @@
   {
     "file": "interlude-25.mp3",
     "source": "The Simpsons Theme - Danny Elfman.m4a",
-    "startSeconds": 8,
-    "durationSeconds": 14
-  },
-  {
-    "file": "interlude-26.mp3",
-    "source": "Tim Burton's Corpse Bride main song - Remains of the Day.m4a",
     "startSeconds": 8,
     "durationSeconds": 14
   },

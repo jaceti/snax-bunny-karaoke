@@ -13,13 +13,15 @@ function fixture(t,{delayed=false}={}){
   const music=new InterludeMusic();music.prepare(ctx);t.after(()=>music.dispose());
   return {music,ctx,sources,requests,resolvers};
 }
-test('all 27 supplied clips exist and shuffle without repeats until the library is exhausted',()=>{
+test('only current manifest clips are eligible and shuffle without repeats until the library is exhausted',()=>{
   const manifest=JSON.parse(readFileSync(new URL('../public/spooky-music/manifest.json',import.meta.url)));
-  assert.equal(manifest.length,27);
+  assert.equal(manifest.length,24);
+  assert.deepEqual(INTERLUDE_TRACKS,manifest.map(track=>'/spooky-music/'+track.file));
+  for(const removed of ['interlude-14.mp3','interlude-21.mp3','interlude-26.mp3'])assert.ok(!INTERLUDE_TRACKS.includes('/spooky-music/'+removed));
   for(const track of INTERLUDE_TRACKS)assert.ok(statSync(new URL('../public'+track,import.meta.url)).size>1000);
   const bag=new TrackBag(INTERLUDE_TRACKS,()=>.5);let previous;
   for(let round=0;round<4;round++){
-    const cycle=Array.from({length:27},()=>bag.next());assert.equal(new Set(cycle).size,27);assert.notEqual(previous,cycle[0]);previous=cycle.at(-1);
+    const cycle=Array.from({length:manifest.length},()=>bag.next());assert.equal(new Set(cycle).size,manifest.length);assert.notEqual(previous,cycle[0]);previous=cycle.at(-1);
   }
 });
 test('prefetches only one clip; repeated room polls do not restart it; next singer uses another clip',async t=>{

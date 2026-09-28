@@ -1,5 +1,7 @@
-// Short, locally hosted excerpts of the 27 user-supplied SpookyWheel tracks.
-export const INTERLUDE_TRACKS=Array.from({length:27},(_,i)=>`/spooky-music/interlude-${String(i+1).padStart(2,"0")}.mp3`);
+import manifest from "../public/spooky-music/manifest.json" with {type:"json"};
+// Winner reveals and between-song cards share the current folder-synced list.
+// Keep filenames stable: removing a track must not resurrect it via cached audio.
+export const INTERLUDE_TRACKS=manifest.map(track=>`/spooky-music/${track.file}`);
 
 export class TrackBag {
   private bag:string[]=[];
