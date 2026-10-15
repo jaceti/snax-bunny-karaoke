@@ -37,7 +37,7 @@ export function WheelView({wheel,serverNow,onLand}:{wheel:WheelState;serverNow:n
         <g className="wheel-notches" aria-hidden="true" stroke="#111" strokeWidth="3" strokeLinecap="round">{Array.from({length:48},(_,index)=>{const inner=point(index*7.5,221),outer=point(index*7.5,228);return <line key={index} x1={inner[0]} y1={inner[1]} x2={outer[0]} y2={outer[1]}/>;})}</g>
         <defs><clipPath id={portraitClip}><circle cx="240" cy="240" r="55"/></clipPath></defs>
         <g transform={`rotate(${-angle} 240 240)`}>
-          {(spooky||gobble)&&<circle cx="240" cy="240" r="55" fill={gobble?"#f2e8bd":"#272725"}/>}
+          {(spooky||gobble)&&<circle cx="240" cy="240" r="55" fill={gobble?"#513524":"#272725"}/>}
           <image href={gobble?"/snax-gobble-portrait.webp":spooky?"/snax-spooky-bunny.png":"/snax-profile-hd.png"} x="185" y="185" width="110" height="110" preserveAspectRatio={spooky?"xMidYMid meet":"xMidYMid slice"} clipPath={`url(#${portraitClip})`}><title>Snax the Bunny</title></image>
           <circle cx="240" cy="240" r="55" fill="none" stroke="#111" strokeWidth="5"/>
         </g>
