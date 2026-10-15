@@ -503,7 +503,7 @@ function SnaxPicksPanel({room,busy,onNext,onAdd,onPick}:{room:RoomState|null;bus
   return <section className="snax-picks" aria-label="Snax's picks">
     <div className="snax-picks-head"><div><p className="eyebrow">Only you see this</p><h2>Snax’s picks</h2></div><button type="button" className="snax-add" onClick={onAdd} disabled={busy}>Add song +</button></div>
     <button type="button" className={`snax-next ${queued?"snax-done":""}`} onClick={onNext} disabled={busy||queued||!picks.length}>{queued?(upNext?"Snax is up next ✓":"Snax is queued ✓"):"Snax sings next"} <span>★</span></button>
-    <p className="snax-note">{queued?(upNext?"Snax is next in the lineup.":"Snax is queued. Another singer goes first to avoid back-to-back turns."):picks.length?`Next up for Snax: ${picks[0].songTitle}`:"Add songs here ahead of time. Tap the button to give Snax the next available turn without singing twice in a row."}</p>
+    {(queued||picks.length>0)&&<p className="snax-note">{queued?(upNext?"Snax is next in the lineup.":"Snax is queued. Another singer goes first to avoid back-to-back turns."):`Next up for Snax: ${picks[0].songTitle}`}</p>}
     {picks.length>0&&<ol>{picks.map((pick,index)=><li key={pick.id}><span className="queue-position">{index+1}</span><div className="queue-copy"><small>{pick.songTitle}</small></div><div className="queue-actions"><button onClick={()=>onPick("pick_up",pick.id)} disabled={busy||index===0} aria-label="Move pick up">↑</button><button onClick={()=>onPick("pick_down",pick.id)} disabled={busy||index===picks.length-1} aria-label="Move pick down">↓</button><button onClick={()=>onPick("pick_delete",pick.id)} disabled={busy} aria-label="Remove pick">×</button></div></li>)}</ol>}
   </section>;
 }
