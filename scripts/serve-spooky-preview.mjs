@@ -2,7 +2,7 @@ import {build} from 'esbuild';
 import {createServer} from 'node:http';
 import {readFile} from 'node:fs/promises';
 import path from 'node:path';
-const bundle=await build({entryPoints:['scripts/spooky-preview.tsx'],bundle:true,write:false,format:'esm',jsx:'automatic'});
+const bundle=await build({entryPoints:[process.argv.includes('--bunny-break')?'scripts/bunny-break-preview.tsx':'scripts/spooky-preview.tsx'],bundle:true,write:false,format:'esm',jsx:'automatic'});
 createServer(async(req,res)=>{
   const url=new URL(req.url,'http://localhost');
   if(url.pathname==='/'){res.setHeader('Content-Type','text/html');res.end('<!doctype html><html><head><title>Spooky Wheel — local test</title><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/style.css"></head><body><div id="root"></div><script type="module" src="/preview.js"></script></body></html>');return;}

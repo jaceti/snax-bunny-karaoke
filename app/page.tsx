@@ -9,12 +9,14 @@ import { WheelView } from "./wheel-view";
 import type { WheelState } from "./wheel-model";
 import { WheelAudio } from "./wheel-audio";
 import { SpookyBats } from "./spooky-icons";
+import { BunnyBreakView } from "./bunny-break-view";
+import type { BunnyBreak } from "./bunny-break-server";
 
 type Song={videoId:string;title:string;channel:string;thumbnail:string};
 type QueueItem={id:number;singerName:string;songTitle:string;videoTitle:string;videoId:string;thumbnailUrl:string;sortOrder:number;status:"pending"|"playing"|"done";startedAt:string|null;sungCount?:number};
 type SnaxPick={id:number;songTitle:string;videoTitle:string;videoId:string;thumbnailUrl:string};
 type PickerMode={mode:"swap";item:QueueItem}|{mode:"pick"};
-type RoomState={snaxPicks?:SnaxPick[];pinnedIds?:number[];code:string;playbackStatus:"idle"|"playing"|"paused";requestsOpen:boolean;requestsToggle:boolean;endsAt:string|null;cutoffMinutes:number;isCurrent?:boolean;nowPlaying:QueueItem|null;queue:QueueItem[];completedCount:number;wheel:WheelState|null;serverNow:number};
+type RoomState={snaxPicks?:SnaxPick[];pinnedIds?:number[];code:string;playbackStatus:"idle"|"playing"|"paused";requestsOpen:boolean;requestsToggle:boolean;endsAt:string|null;cutoffMinutes:number;isCurrent?:boolean;nowPlaying:QueueItem|null;queue:QueueItem[];completedCount:number;wheel:WheelState|null;bunnyBreak:BunnyBreak|null;serverNow:number};
 type Screen="landing"|"name"|"singer"|"host"|"tv";
 type Player=TvPlayer;
 
@@ -284,7 +286,8 @@ export default function Home(){
   useEffect(()=>{if(screen==="tv")void wheelAudioRef.current?.unlock();},[screen]);
   useEffect(()=>{wheelAudioRef.current?.sync(screen==="tv"?room?.wheel||null:null,room?.serverNow||Date.now());},[room,screen]);
   // Supplied spooky music under each between-song name card; host pause stays silent.
-  useEffect(()=>{wheelAudioRef.current?.interlude(screen==="tv"&&interlude&&!!room?.nowPlaying&&!room?.wheel&&room?.playbackStatus==="playing",String(room?.nowPlaying?.id));},[screen,interlude,room?.nowPlaying?.id,room?.wheel,room?.playbackStatus]);
+  useEffect(()=>{wheelAudioRef.current?.interlude(screen==="tv"&&interlude&&!!room?.nowPlaying&&!room?.wheel&&room?.playbackStatus==="playing"&&room?.bunnyBreak?.phase!=="active",String(room?.nowPlaying?.id));},[screen,interlude,room?.nowPlaying?.id,room?.wheel,room?.playbackStatus,room?.bunnyBreak?.phase]);
+  useEffect(()=>{wheelAudioRef.current?.bunnyBreak(screen==="tv"?room?.bunnyBreak||null:null);},[screen,room?.bunnyBreak]);
 
   // Stop the TV locally at the same cutoff even if venue Wi-Fi drops at 3 AM.
   useEffect(()=>{
@@ -294,7 +297,7 @@ export default function Home(){
       const current=singerNight();
       if(current!==night){
         night=current;tvPlaybackRef.current?.update(null,"idle");
-        setRoom(value=>value?{...value,nowPlaying:null,queue:[],playbackStatus:"idle",completedCount:0,endsAt:null,requestsOpen:true,requestsToggle:true,wheel:null}:value);
+        setRoom(value=>value?{...value,nowPlaying:null,queue:[],playbackStatus:"idle",completedCount:0,endsAt:null,requestsOpen:true,requestsToggle:true,wheel:null,bunnyBreak:null}:value);
         void fetchRoom(roomCode,true,"tv");
       }
       window.clearTimeout(timer);timer=window.setTimeout(check,Math.max(1,nextSingerReset()-Date.now()));
@@ -369,9 +372,10 @@ export default function Home(){
     {screen==="host"&&<section className="host-stage"><header className="app-header"><button className="wordmark" onClick={home}>SNAX</button><div className="host-room">Host console · Room <strong>{roomCode}</strong></div></header>
       {room?.isCurrent===false&&<div className="requests-closed">This is an older room. The TV and singer QR may be using tonight’s room. <button onClick={()=>void resumeOrCreateRoom()} disabled={busy}>Connect to tonight’s room</button></div>}
       {!canHost&&<div className="requests-closed">Host controls aren’t connected yet. <button onClick={()=>void resumeOrCreateRoom()} disabled={busy}>Enable host controls</button></div>}
-      <div className="host-grid"><section className="host-controls"><p className="eyebrow">Playback</p><h1>{room?.nowPlaying?room.nowPlaying.singerName:"Ready when you are"}</h1>{room?.nowPlaying&&<p className="current-song">{room.nowPlaying.songTitle}</p>}<div className="control-row"><button className="play-control" onClick={()=>void control(room?.playbackStatus==="playing"?"pause":"play")} disabled={!canHost||busy||!!room?.wheel||(!room?.nowPlaying&&!room?.queue.length)}>{room?.playbackStatus==="playing"?"Pause":"Play"} <span>{room?.playbackStatus==="playing"?"Ⅱ":"▶"}</span></button><button onClick={()=>void control("skip",room?.nowPlaying?.id)} disabled={!canHost||busy||!!room?.wheel||!room?.nowPlaying}>Skip <span>→</span></button><button className="swap-control" onClick={()=>room?.nowPlaying&&setPicker({mode:"swap",item:room.nowPlaying})} disabled={!canHost||busy||!room?.nowPlaying}>Swap video <span>⇄</span></button></div>
-      <div className="host-wheel-controls"><div className="wheel-choices"><button className="wheel-open-button" disabled={!canHost||busy||!!room?.wheel||!room?.queue.length} onClick={()=>void setEvent({action:"wheel_open"})}>Wheel <span>✷</span></button><button className="wheel-open-button spooky-wheel-button" disabled={!canHost||busy||!!room?.wheel||!room?.queue.length} onClick={()=>void setEvent({action:"wheel_open",wheelTheme:"spooky"})}>Spooky Wheel <span aria-hidden="true">☠</span></button></div>
+      <div className="host-grid"><section className="host-controls"><p className="eyebrow">Playback</p><h1>{room?.nowPlaying?room.nowPlaying.singerName:"Ready when you are"}</h1>{room?.nowPlaying&&<p className="current-song">{room.nowPlaying.songTitle}</p>}<div className="control-row"><button className="play-control" onClick={()=>void control(room?.playbackStatus==="playing"?"pause":"play")} disabled={!canHost||busy||!!room?.wheel||room?.bunnyBreak?.phase==="active"||(!room?.nowPlaying&&!room?.queue.length)}>{room?.playbackStatus==="playing"?"Pause":"Play"} <span>{room?.playbackStatus==="playing"?"Ⅱ":"▶"}</span></button><button onClick={()=>void control("skip",room?.nowPlaying?.id)} disabled={!canHost||busy||!!room?.wheel||room?.bunnyBreak?.phase==="active"||!room?.nowPlaying}>Skip <span>→</span></button><button className="swap-control" onClick={()=>room?.nowPlaying&&setPicker({mode:"swap",item:room.nowPlaying})} disabled={!canHost||busy||!room?.nowPlaying}>Swap video <span>⇄</span></button></div>
+      <div className="host-wheel-controls"><div className="wheel-choices"><button className="wheel-open-button" disabled={!canHost||busy||!!room?.wheel||!!room?.bunnyBreak||!room?.queue.length} onClick={()=>void setEvent({action:"wheel_open"})}>Wheel <span>✷</span></button><button className="wheel-open-button spooky-wheel-button" disabled={!canHost||busy||!!room?.wheel||!!room?.bunnyBreak||!room?.queue.length} onClick={()=>void setEvent({action:"wheel_open",wheelTheme:"spooky"})}>Spooky Wheel <span aria-hidden="true">☠</span></button></div>
       {room?.wheel&&<div className="host-wheel-panel"><strong>{room.wheel.phase==="ready"?`${room.wheel.theme==="spooky"?"Spooky wheel":"Wheel"} is on the TV`:room.wheel.phase==="spinning"?"Spinning…":`${room.wheel.entries[room.wheel.winnerIndex!]?.name} is now singing!`}</strong><div><button disabled={!canHost||busy||room.wheel.phase!=="ready"} onClick={()=>void setEvent({action:"wheel_spin",wheelId:room.wheel?.id})}>Spin ↻</button><button disabled={!canHost||busy||room.wheel.phase==="spinning"} onClick={()=>void setEvent({action:"wheel_close",wheelId:room.wheel?.id})}>{room.wheel.phase==="winner"?"Play winner →":"Close wheel"}</button></div><small>Playback pauses for the wheel. The winner sings now; the interrupted song goes after unless more than half has already played.</small></div>}</div>
+      <section className="host-bunny-break"><button type="button" aria-pressed={!!room?.bunnyBreak} disabled={!canHost||busy||!!room?.wheel} onClick={()=>void setEvent({action:"break_set",breakEnabled:!room?.bunnyBreak})}>{room?.bunnyBreak?.phase==="active"?"End bunny break":room?.bunnyBreak?"Cancel bathroom break":"Bunny Bathroom Break"} <span aria-hidden="true">Ⅱ</span></button><p role="status">{room?.bunnyBreak?.phase==="active"?"Snax is on a bunny bathroom break. Press again to stop the break music and resume karaoke.":room?.bunnyBreak?"Break is scheduled after this song finishes. Press again to cancel.":"Let this song finish, then hold the show for a bunny bathroom break."}</p></section>
       <SnaxPicksPanel room={room} busy={!canHost||busy} onNext={()=>void setEvent({action:"snax_next"})} onAdd={()=>setPicker({mode:"pick"})} onPick={(action,pickId)=>void setEvent({action,pickId})}/>
       </section><QueuePanel room={room} busy={!canHost||busy||!!room?.wheel} onControl={control} onSwap={item=>setPicker({mode:"swap",item})} host/><section className="host-night">
       <div className="event-controls">
@@ -402,21 +406,22 @@ export default function Home(){
     {screen==="tv"&&<section className="tv-stage-full">
       <header className="tv-top">
         <div className="tv-brand"><img src="/snax-profile-hd.png" alt="Snax the Bunny"/><strong>SNAX</strong><span>Karaoke</span></div>
-        <div className="tv-now" aria-live="polite">{room?.nowPlaying?<><span>{room.playbackStatus==="paused"?"Paused · Now singing":interlude?"Taking the mic":"Now singing"}</span><FitText text={room.nowPlaying.singerName} max={40} min={18}/><a href={`https://www.youtube.com/watch?v=${room.nowPlaying.videoId}`} target="_blank" rel="noreferrer">{room.nowPlaying.videoTitle} ↗</a></>:<><span>Now singing</span><FitText text="The stage is open" max={40} min={18}/><em>Ready when you are</em></>}</div>
-        <div className="tv-now tv-next" aria-live="polite"><span>Up next</span><FitText text={room?.queue[0]?.singerName||"You could be next"} max={34} min={18}/><em>{room?.queue[0]?.songTitle||"Scan the QR to add a song"}</em></div>
+        <div className="tv-now" aria-live="polite">{room?.bunnyBreak?.phase==="active"?<><span>Bunny bathroom break</span><FitText text="Snax will be right back!" max={40} min={18}/></>:room?.nowPlaying?<><span>{room.playbackStatus==="paused"?"Paused · Now singing":interlude?"Taking the mic":"Now singing"}</span><FitText text={room.nowPlaying.singerName} max={40} min={18}/><a href={`https://www.youtube.com/watch?v=${room.nowPlaying.videoId}`} target="_blank" rel="noreferrer">{room.nowPlaying.videoTitle} ↗</a></>:<><span>Now singing</span><FitText text="The stage is open" max={40} min={18}/><em>Ready when you are</em></>}</div>
+        <div className="tv-now tv-next" aria-live="polite"><span>{room?.bunnyBreak?.phase==="active"?"After the break":"Up next"}</span><FitText text={room?.queue[0]?.singerName||"You could be next"} max={34} min={18}/><em>{room?.queue[0]?.songTitle||"Scan the QR to add a song"}</em></div>
       </header>
       <div className="tv-body">
         <div className="tv-video">
+          {room?.bunnyBreak?.phase==="active"&&<BunnyBreakView/>}
           {room?.wheel&&<WheelView wheel={room.wheel} serverNow={room.serverNow} onLand={id=>wheelAudioRef.current?.land(id)}/>}
-          <div ref={playerMountRef} className="youtube-player" style={{visibility:room?.nowPlaying&&!interlude&&!room?.wheel?"visible":"hidden"}} aria-hidden={!room?.nowPlaying||interlude||!!room?.wheel}/>
-          {!room?.wheel&&(!room?.nowPlaying||interlude)&&<div className={`tv-idle ${interlude&&room?.nowPlaying?"tv-idle-interlude spooky-interlude":""}`}>
+          <div ref={playerMountRef} className="youtube-player" style={{visibility:room?.nowPlaying&&!interlude&&!room?.wheel&&room?.bunnyBreak?.phase!=="active"?"visible":"hidden"}} aria-hidden={!room?.nowPlaying||interlude||!!room?.wheel||room?.bunnyBreak?.phase==="active"}/>
+          {room?.bunnyBreak?.phase!=="active"&&!room?.wheel&&(!room?.nowPlaying||interlude)&&<div className={`tv-idle ${interlude&&room?.nowPlaying?"tv-idle-interlude spooky-interlude":""}`}>
             {interlude&&<SpookyBats/>}<img src={interlude?"/snax-spooky-bunny.png":"/snax-profile-hd.png"} alt="Snax the Bunny" className="tv-idle-bunny"/>
             <div className="tv-idle-copy"><span>{room?.nowPlaying?"Up next":room?.queue.length?"Up first":"Welcome to"}</span><FitText text={room?.nowPlaying?.singerName||room?.queue[0]?.singerName||"Snax Karaoke"} max={150} min={40}/><em>{room?.nowPlaying?.songTitle||room?.queue[0]?.songTitle||"Scan the code. Pick a song. Take the mic."}</em></div>
             <div className="tv-idle-qr"><SingerQRCode size={220}/><strong>{roomCode}</strong><small>Scan to sing</small></div>
           </div>}
         </div>
         <aside className="tv-side">
-          {((!wheelSoundEnabled&&!!room?.wheel)||(autoplayBlocked&&room?.playbackStatus==="playing"))&&<div className="tv-playback-prompt" role="status"><p>This browser has blocked TV audio. Tap once here; songs and future wheel spins then play automatically while this page stays open.</p><button onClick={()=>{void wheelAudioRef.current?.unlock();if(room?.playbackStatus==="playing")tvPlaybackRef.current?.allowPlayback();}}>Enable TV audio ▶</button></div>}
+          {((!wheelSoundEnabled&&(!!room?.wheel||room?.bunnyBreak?.phase==="active"))||(autoplayBlocked&&room?.playbackStatus==="playing"))&&<div className="tv-playback-prompt" role="status"><p>This browser has blocked TV audio. Tap once here; songs, wheel sounds, and break music then play automatically while this page stays open.</p><button onClick={()=>{void wheelAudioRef.current?.unlock();if(room?.playbackStatus==="playing")tvPlaybackRef.current?.allowPlayback();}}>Enable TV audio ▶</button></div>}
           <div className="tv-qr"><SingerQRCode size={150}/><strong>{roomCode}</strong><small>Scan to add a song</small></div>
           <div className="tv-lineup"><span>Next up</span><ol>{room?.queue.slice(0,4).map((item,index)=><li key={item.id}><span>{index+1}</span><div><strong>{item.singerName}</strong><small>{item.songTitle}</small></div></li>)}{!room?.queue.length&&<li className="tv-lineup-empty">Lineup’s open. Grab your phone.</li>}</ol></div>
         </aside>

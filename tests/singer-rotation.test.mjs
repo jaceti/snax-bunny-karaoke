@@ -4,6 +4,7 @@ import {DatabaseSync} from 'node:sqlite';
 import {readFileSync} from 'node:fs';
 import ts from 'typescript';
 import * as rotation from '../app/singer-rotation.ts';
+import * as breaks from '../app/bunny-break-server.ts';
 import * as wheels from '../app/wheel-server.ts';
 import * as picks from '../app/snax-picks.ts';
 import * as access from '../app/api/rooms/shared-host.ts';
@@ -33,13 +34,70 @@ async function fixture(){
     if(name.endsWith('wheel-server'))return wheels;
     if(name.endsWith('snax-picks'))return picks;
     if(name.endsWith('singer-rotation'))return rotation;
+    if(name.endsWith('bunny-break-server'))return breaks;
     throw Error(name);
   },mod,mod.exports);
   const context={params:Promise.resolve({code:'ROOM'})};
-  const patch=async body=>{const response=await mod.exports.PATCH(new Request('https://example.test/api/rooms/ROOM',{method:'PATCH',headers:{'x-host-token':'test-host','content-type':'application/json'},body:JSON.stringify(body)}),context);const data=await response.json();assert.equal(response.status,200,JSON.stringify(data));return data;};
+  const rawPatch=async(body,headers={'x-host-token':'test-host'})=>mod.exports.PATCH(new Request('https://example.test/api/rooms/ROOM',{method:'PATCH',headers:{...headers,'content-type':'application/json'},body:JSON.stringify(body)}),context);
+  const patch=async body=>{const response=await rawPatch(body);const data=await response.json();assert.equal(response.status,200,JSON.stringify(data));return data;};
   const get=async()=>{const response=await mod.exports.GET(new Request('https://example.test/api/rooms/ROOM',{headers:{'x-host-token':'test-host'}}),context);assert.equal(response.status,200);return response.json();};
-  return {sql,db,patch,get};
+  return {sql,db,patch,get,rawPatch};
 }
+
+test('bunny break finishes current song, preserves lineup, holds across reload, then resumes without a repeated singer',async()=>{
+  const {sql,patch,get}=await fixture();
+  const before=await get();
+  const pending=await patch({action:'break_set',breakEnabled:true});
+  assert.equal(pending.bunnyBreak.phase,'pending');assert.equal(pending.nowPlaying.id,1);assert.equal(pending.playbackStatus,'playing');
+  assert.deepEqual(pending.queue,before.queue);
+  assert.equal((await patch({action:'break_set',breakEnabled:true})).bunnyBreak.id,pending.bunnyBreak.id);
+  const active=await patch({action:'complete',itemId:1});
+  assert.equal(active.bunnyBreak.phase,'active');assert.equal(active.nowPlaying,null);assert.equal(active.playbackStatus,'paused');
+  assert.deepEqual(active.queue.map(q=>q.id),[4,2,5,3]);assert.equal(active.completedCount,1);
+  assert.equal((await get()).bunnyBreak.id,pending.bunnyBreak.id);
+  const stale=await patch({action:'complete',itemId:1});assert.equal(stale.completedCount,1);assert.equal(stale.nowPlaying,null);
+  const resumed=await patch({action:'break_set',breakEnabled:false});
+  assert.equal(resumed.bunnyBreak,null);assert.equal(resumed.nowPlaying.id,4);assert.equal(resumed.playbackStatus,'playing');
+  assert.equal((await patch({action:'break_set',breakEnabled:false})).nowPlaying.id,4);
+  sql.close();
+});
+test('cancelling a scheduled break leaves the current paused song untouched',async()=>{
+  const {sql,patch}=await fixture();await patch({action:'pause'});
+  await patch({action:'break_set',breakEnabled:true});
+  const cancelled=await patch({action:'break_set',breakEnabled:false});
+  assert.equal(cancelled.bunnyBreak,null);assert.equal(cancelled.nowPlaying.id,1);assert.equal(cancelled.playbackStatus,'paused');
+  assert.equal(cancelled.completedCount,0);sql.close();
+});
+test('idle break starts immediately, accepts new waiting songs, and never starts them before host ends break',async()=>{
+  const {sql,patch,get,db}=await fixture();sql.exec("DELETE FROM queue_items;UPDATE rooms SET playback_status='idle'");
+  assert.equal((await patch({action:'break_set',breakEnabled:true})).bunnyBreak.phase,'active');
+  sql.exec("INSERT INTO queue_items(room_code,singer_name,song_title,sort_order,status) VALUES('ROOM','New singer','New song',1,'pending')");
+  assert.equal(await breaks.startNextOutsideBreak(db,'ROOM'),null);
+  assert.equal((await get()).nowPlaying,null);
+  assert.equal((await patch({action:'break_set',breakEnabled:false})).nowPlaying.singerName,'New singer');sql.close();
+});
+test('bunny break and both wheels are mutually exclusive; active break only exits with break control',async()=>{
+  const {sql,patch,rawPatch}=await fixture();
+  await patch({action:'break_set',breakEnabled:true});
+  for(const wheelTheme of ['classic','spooky'])assert.equal((await rawPatch({action:'wheel_open',wheelTheme})).status,409);
+  await patch({action:'skip',itemId:1});
+  for(const action of ['play','pause','skip'])assert.equal((await rawPatch({action})).status,409);
+  await patch({action:'break_set',breakEnabled:false});
+  const wheel=await patch({action:'wheel_open'});assert.ok(wheel.wheel);
+  assert.equal((await rawPatch({action:'break_set',breakEnabled:true})).status,409);sql.close();
+});
+test('break requires host access and explicit state, and manual/daily resets remove break without changing QR credentials',async()=>{
+  const {sql,patch,rawPatch,db,get}=await fixture();
+  assert.equal((await rawPatch({action:'break_set',breakEnabled:true},{})).status,403);
+  assert.equal((await rawPatch({action:'break_set'})).status,400);
+  const keys=sql.prepare('SELECT host_token_hash,invite_token_hash,tv_token_hash FROM rooms').get();
+  await patch({action:'break_set',breakEnabled:true});await patch({action:'reset_event'});
+  assert.equal((await get()).bunnyBreak,null);
+  await patch({action:'break_set',breakEnabled:true});
+  await ensureDailyReset(db,Date.parse('2026-10-15T10:00:00Z'));
+  assert.equal((await get()).bunnyBreak,null);
+  assert.deepEqual(sql.prepare('SELECT host_token_hash,invite_token_hash,tv_token_hash FROM rooms').get(),keys);sql.close();
+});
 
 test('wheel remains uniformly random among all eligible distinct singers, regardless of song count',()=>{
   const rows=['Jess','Alex','Alex','Sam','Pat'].map((singer_name,i)=>({id:i+1,singer_name,song_title:'song'}));

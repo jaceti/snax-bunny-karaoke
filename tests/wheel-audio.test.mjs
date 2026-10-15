@@ -10,8 +10,8 @@ function audioFixture(t){
     state='running';currentTime=0;destination={};async resume(){}async close(){}
     createBuffer(){return {copyToChannel(){}};}
     async decodeAudioData(bytes){return {recordedWow:new Uint8Array(bytes)[0]===1,recordedDrum:new Uint8Array(bytes)[0]===2};}
-    createBufferSource(){const node={connect(){},start(...args){this.args=args;},stop(){this.stopped=true;}};sources.push(node);return node;}
-    createGain(){return {gain:{...param},connect(){}};}
+    createBufferSource(){const node={connect(){},disconnect(){},start(...args){this.args=args;},stop(){this.stopped=true;}};sources.push(node);return node;}
+    createGain(){return {gain:{...param},connect(){},disconnect(){}};}
     createOscillator(){return {frequency:param,connect(){},start(){},stop(){}};}
   }
   const original={window:globalThis.window,AudioContext:globalThis.AudioContext,SpeechSynthesisUtterance:globalThis.SpeechSynthesisUtterance};
@@ -20,6 +20,17 @@ function audioFixture(t){
   return {spoken,sources,Context,restore:()=>Object.assign(globalThis,original)};
 }
 const wheel={id:'spin-1',phase:'spinning',startedAt:1000,endsAt:8000,entries:[],winnerIndex:0,rotation:2200};
+
+test('TV audio integration keeps pending break silent, plays active break through polls, and stops on exit',async t=>{
+  const {sources,restore}=audioFixture(t);const audio=new WheelAudio(()=>{});t.after(()=>{audio.dispose();restore();});
+  t.mock.method(globalThis,'fetch',async()=>({ok:true,arrayBuffer:async()=>Uint8Array.of(9).buffer}));
+  audio.bunnyBreak({id:'break-1',phase:'pending'});await audio.unlock();for(let i=0;i<12;i++)await Promise.resolve();assert.equal(sources.length,0);
+  audio.sync(null,1000);audio.interlude(false,'undefined');audio.bunnyBreak({id:'break-1',phase:'active'});
+  for(let i=0;i<12;i++)await Promise.resolve();assert.equal(sources.length,1);
+  for(let poll=0;poll<5;poll++){audio.sync(null,1000);audio.bunnyBreak({id:'break-1',phase:'active'});}
+  assert.equal(sources.length,1);assert.notEqual(sources[0].stopped,true);
+  audio.bunnyBreak(null);assert.equal(sources[0].stopped,true);
+});
 
 test('drumroll lasts seven seconds with safe sample levels',()=>{
   const samples=drumrollSamples();assert.equal(samples.length,7*22050);

@@ -1,9 +1,11 @@
+import { ensureBreakSchema,readBreak } from "./bunny-break-server.ts";
 import { ensureSnaxSchema } from "./snax-picks.ts";
 import { ensureRotationSchema,previousSinger,eligibleSingers,rememberSingerStatement } from "./singer-rotation.ts";
 import { wheelEntries,pickWheelWinner,wheelRotation,WHEEL_DURATION,type WheelState,type WheelTheme } from "./wheel-model.ts";
 const initialized=new WeakMap<D1Database,Promise<unknown>>();
 export async function ensureWheelSchema(db:D1Database){
   await ensureRotationSchema(db);
+  await ensureBreakSchema(db);
   let promise=initialized.get(db);
   if(!promise){promise=db.prepare("CREATE TABLE IF NOT EXISTS room_wheel (room_code TEXT PRIMARY KEY,state TEXT NOT NULL,resume_playback INTEGER NOT NULL DEFAULT 0)").run();initialized.set(db,promise);promise.catch(()=>initialized.delete(db));}
   await promise;
@@ -39,6 +41,7 @@ async function entries(db:D1Database,code:string){
 }
 export async function openWheel(db:D1Database,code:string,theme:WheelTheme="classic"){
   await ensureWheelSchema(db);
+  if(await readBreak(db,code))throw new Error("End or cancel the bunny bathroom break before opening a wheel.");
   if(await rawWheel(db,code))return;
   const roster=await entries(db,code);if(!roster.length)throw new Error("Add at least one singer to the lineup before opening the wheel.");
   const interrupted=await db.prepare("SELECT id FROM queue_items WHERE room_code=? AND status='playing' ORDER BY sort_order,id LIMIT 1").bind(code).first<{id:number}>();

@@ -1,5 +1,6 @@
 import { env } from "cloudflare:workers";
-import { noRepeatOrder,previousSinger,nextQueuedSinger,rememberSingerStatement } from "../../../singer-rotation";
+import { readBreak,setBunnyBreak,activatePendingBreak,startNextOutsideBreak } from "../../../bunny-break-server";
+import { noRepeatOrder,previousSinger,rememberSingerStatement } from "../../../singer-rotation";
 import { hostTokenMatches } from "../shared-host";
 import { readWheel,openWheel,spinWheel,closeWheel,finishInterruptedSong } from "../../../wheel-server";
 import { listPicks,pinnedIds,addPick,deletePick,movePick,snaxSingsNext } from "../../../snax-picks";
@@ -34,6 +35,8 @@ async function state(code:string, host=false) {
   const db=dbBinding();
   // Finalize a landed wheel before reading the current singer and lineup.
   const wheel=await readWheel(db,code);
+  let bunnyBreak=await readBreak(db,code);
+  if(bunnyBreak?.phase==="pending")bunnyBreak=await activatePendingBreak(db,code);
   const room=await db.prepare("SELECT code, playback_status, requests_open, ends_at, completed_count FROM rooms WHERE code = ?").bind(code).first<{code:string;playback_status:"idle"|"playing"|"paused";requests_open:number;ends_at:string|null;completed_count:number}>();
   if(!room) return null;
   const [now,waiting,current]=await Promise.all([
@@ -41,7 +44,7 @@ async function state(code:string, host=false) {
     db.prepare("SELECT q.id,q.singer_name,q.song_title,q.video_title,q.video_id,q.thumbnail_url,q.sort_order,q.status,q.started_at,COALESCE(s.sung_count,0) AS sung_count FROM queue_items q LEFT JOIN singer_stats s ON s.room_code=q.room_code AND s.singer_key=lower(trim(q.singer_name)) WHERE q.room_code=? AND q.status='pending' ORDER BY q.sort_order,q.id").bind(code).all<QueueRow>(),
     db.prepare("SELECT code FROM current_room WHERE id=1").first<{code:string}>().catch(()=>null),
   ]);
-  return { code, playbackStatus:room.playback_status, requestsOpen:requestsAreOpen(room), requestsToggle:!!room.requests_open, endsAt:room.ends_at, cutoffMinutes:CUTOFF_MINUTES, isCurrent:current?.code===code, nowPlaying:now?queueItem(now):null, queue:noRepeatOrder(waiting.results,now?.singer_name||await previousSinger(db,code)).slice(0,100).map(queueItem), completedCount:Number(room.completed_count||0),wheel,serverNow:Date.now(),
+  return { code, playbackStatus:room.playback_status, requestsOpen:requestsAreOpen(room), requestsToggle:!!room.requests_open, endsAt:room.ends_at, cutoffMinutes:CUTOFF_MINUTES, isCurrent:current?.code===code, nowPlaying:now?queueItem(now):null, queue:noRepeatOrder(waiting.results,now?.singer_name||await previousSinger(db,code)).slice(0,100).map(queueItem), completedCount:Number(room.completed_count||0),wheel,bunnyBreak,serverNow:Date.now(),
     // Host-only: Snax's private setlist and which lineup songs are pinned for her.
     ...(host?{snaxPicks:await listPicks(db,code).catch(()=>[]),pinnedIds:await pinnedIds(db,code).catch(()=>[])}:{}) };
 }
@@ -71,9 +74,19 @@ export async function PATCH(request:Request, context:{params:Promise<{code:strin
   try {
     const code=codeOf((await context.params).code); const isHost=await verify(code,request,"host"); const isTv=isHost?false:await verify(code,request,"tv"); const isGuest=isHost||isTv?false:await verify(code,request,"invite");
     if(!isHost&&!isTv&&!isGuest) return Response.json({error:"This control needs a private room link."},{status:403});
-    const {action,itemId,requestsOpen,endsAt,inviteToken,tvToken,wheelId,wheelTheme,pickId,song}=await request.json() as {action?:"play"|"pause"|"skip"|"complete"|"move_up"|"move_down"|"delete"|"set_requests"|"set_end_time"|"reset_event"|"claim_current"|"balance"|"clear_queue"|"wheel_open"|"wheel_spin"|"wheel_close"|"swap_video"|"pick_add"|"pick_delete"|"pick_up"|"pick_down"|"snax_next";itemId?:number;requestsOpen?:boolean;endsAt?:string|null;inviteToken?:string;tvToken?:string;wheelId?:string;wheelTheme?:"classic"|"spooky";pickId?:number;song?:{title?:string;videoId?:string;thumbnail?:string}};
+    const {action,itemId,requestsOpen,endsAt,inviteToken,tvToken,wheelId,wheelTheme,pickId,song,breakEnabled}=await request.json() as {action?:"break_set"|"play"|"pause"|"skip"|"complete"|"move_up"|"move_down"|"delete"|"set_requests"|"set_end_time"|"reset_event"|"claim_current"|"balance"|"clear_queue"|"wheel_open"|"wheel_spin"|"wheel_close"|"swap_video"|"pick_add"|"pick_delete"|"pick_up"|"pick_down"|"snax_next";breakEnabled?:boolean;itemId?:number;requestsOpen?:boolean;endsAt?:string|null;inviteToken?:string;tvToken?:string;wheelId?:string;wheelTheme?:"classic"|"spooky";pickId?:number;song?:{title?:string;videoId?:string;thumbnail?:string}};
     if(!action) return Response.json({error:"Unknown room control."},{status:400});
     const respond=async(status=200)=>Response.json(await state(code,isHost),{status});
+
+    if(action==="break_set"){
+      if(!isHost)return Response.json({error:"Only the host can control bunny breaks."},{status:403});
+      if(typeof breakEnabled!=="boolean")return Response.json({error:"Choose whether to start or end the break."},{status:400});
+      if(await readWheel(dbBinding(),code))return Response.json({error:"Close the wheel before taking a bunny break."},{status:409});
+      await setBunnyBreak(dbBinding(),code,breakEnabled);
+      return respond();
+    }
+    const bunnyBreak=await readBreak(dbBinding(),code);
+    if(bunnyBreak?.phase==="active"&&["play","pause","skip"].includes(action))return Response.json({error:"Press End bunny break to resume karaoke."},{status:409});
 
     // Snax's private picks and the video swap work even while the wheel is up: they
     // never change who is singing or the order of the lineup.
@@ -146,6 +159,7 @@ export async function PATCH(request:Request, context:{params:Promise<{code:strin
         db2.prepare("UPDATE rooms SET playback_status='idle', requests_open=1, ends_at=NULL, completed_count=0 WHERE code=?").bind(code),
         db2.prepare("DELETE FROM singer_stats WHERE room_code=?").bind(code),
         db2.prepare("DELETE FROM room_rotation WHERE room_code=?").bind(code),
+        db2.prepare("DELETE FROM room_break WHERE room_code=?").bind(code),
       ]);
       return respond();
     }
@@ -200,17 +214,17 @@ export async function PATCH(request:Request, context:{params:Promise<{code:strin
       ]); }
     if(action==="pause") await db.prepare("UPDATE rooms SET playback_status='paused' WHERE code=?").bind(code).run();
     if(action==="play") {
-      if(!current){ const next=await nextQueuedSinger(db,code); if(next) await db.prepare("UPDATE queue_items SET status='playing',started_at=CURRENT_TIMESTAMP WHERE id=?").bind(next.id).run(); }
-      await db.prepare("UPDATE rooms SET playback_status='playing' WHERE code=?").bind(code).run();
+      if(!current)await startNextOutsideBreak(db,code);
+      await db.prepare("UPDATE rooms SET playback_status='playing' WHERE code=? AND NOT EXISTS(SELECT 1 FROM room_break WHERE room_code=? AND phase='active')").bind(code,code).run();
     }
     if(action==="complete"||action==="skip") {
-      const next=await nextQueuedSinger(db,code);
+      if(await activatePendingBreak(db,code))return respond();
+      const next=await startNextOutsideBreak(db,code);
       if(next){
-        await db.prepare("UPDATE queue_items SET status='playing',started_at=CURRENT_TIMESTAMP WHERE id=?").bind(next.id).run();
         // A host pause wins even when it arrives during the song transition.
-        await db.prepare("UPDATE rooms SET playback_status=CASE WHEN playback_status='paused' THEN 'paused' ELSE 'playing' END WHERE code=?").bind(code).run();
+        await db.prepare("UPDATE rooms SET playback_status=CASE WHEN playback_status='paused' THEN 'paused' ELSE 'playing' END WHERE code=? AND NOT EXISTS(SELECT 1 FROM room_break WHERE room_code=?)").bind(code,code).run();
       }
-      else await db.prepare("UPDATE rooms SET playback_status='idle' WHERE code=?").bind(code).run();
+      else await db.prepare("UPDATE rooms SET playback_status='idle' WHERE code=? AND NOT EXISTS(SELECT 1 FROM room_break WHERE room_code=?)").bind(code,code).run();
     }
     return respond();
   } catch(error){ return Response.json({error:error instanceof Error?error.message:"The controls missed their cue."},{status:500}); }

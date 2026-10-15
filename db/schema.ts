@@ -71,3 +71,9 @@ export const roomRotation = sqliteTable("room_rotation", {
   roomCode: text("room_code").primaryKey(),
   lastSingerKey: text("last_singer_key").notNull(),
 });
+
+export const roomBreak = sqliteTable("room_break", {
+  roomCode: text("room_code").primaryKey(),
+  id: text("id").notNull(),
+  phase: text("phase", { enum: ["pending", "active"] }).notNull(),
+});

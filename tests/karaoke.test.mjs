@@ -22,6 +22,16 @@ function setup(t, complete = async () => true) {
 }
 const songA = { id: 1, videoId: 'first' }, songB = { id: 2, videoId: 'second' };
 
+test('bathroom hold leaves the current song until its end, stays silent, then automatically loads next singer',async t=>{
+  const {playback,calls,completions}=setup(t);
+  playback.update(songA,'playing');playback.stateChanged(1);
+  const before=calls.length;playback.update(songA,'playing',false);assert.equal(calls.length,before);
+  playback.stateChanged(0);await Promise.resolve();assert.deepEqual(completions,[1]);
+  playback.update(null,'paused',false);assert.deepEqual(calls.at(-1),['pause']);
+  t.mock.timers.tick(60_000);assert.equal(calls.filter(c=>c[0]==='load').length,1);
+  playback.update(songB,'playing',false);t.mock.timers.tick(10_000);assert.deepEqual(calls.at(-1),['load','second']);
+});
+
 test('wheel winner is cued silently and plays on close without another interlude',t=>{
   const {playback,calls}=setup(t);
   playback.update(songA,'playing');playback.stateChanged(1);

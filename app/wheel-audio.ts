@@ -1,3 +1,5 @@
+import { BunnyBreakMusic } from "./bunny-break-music.ts";
+import type { BunnyBreak } from "./bunny-break-server";
 import type { WheelState } from "./wheel-model";
 import { InterludeMusic } from "./interlude-music.ts";
 
@@ -53,6 +55,7 @@ export class WheelAudio {
   private cymbal:AudioBufferSourceNode|null=null;
   private loadingWow:Promise<void>|null=null;
   private music=new InterludeMusic();
+  private breakMusic:BunnyBreakMusic|null=null;
   private spookyWinnerMusic:InterludeMusic|null=null;
   // Snax's "Bumbersnax" track plays from the moment the wheel reveals a winner
   // until the host closes the wheel.
@@ -66,18 +69,20 @@ export class WheelAudio {
     try{
       if(!this.context){
         this.context=new AudioContext();
-        this.context.onstatechange=()=>{if(!this.disposed){this.enabled(this.context?.state==="running");this.schedule();this.music.resume();this.spookyWinnerMusic?.resume();}};
+        this.context.onstatechange=()=>{if(!this.disposed){this.enabled(this.context?.state==="running");this.schedule();this.music.resume();this.spookyWinnerMusic?.resume();this.breakMusic?.resume();}};
         this.music.prepare(this.context);
       }
       // Preload even while browser permission is pending, not after the first spin.
       void this.preloadWow();
       if(this.spookyWinnerMusic)this.spookyWinnerMusic.prepare(this.context);
+      if(this.breakMusic)this.breakMusic.prepare(this.context);
       await this.context.resume();
       if(this.disposed)return;
       this.enabled(this.context.state==="running");
       this.schedule();
       this.music.resume();
       this.spookyWinnerMusic?.resume();
+      this.breakMusic?.resume();
     }catch{this.enabled(false);}
   }
   private preloadWow(){
@@ -127,6 +132,13 @@ export class WheelAudio {
     this.timer=setTimeout(()=>this.wow(wheel.id),remaining);
   }
   interlude(on:boolean,songKey="interlude"){this.music.set(on,songKey);}
+  bunnyBreak(state:BunnyBreak|null){
+    if(this.disposed)return;
+    if(state){this.breakMusic??=new BunnyBreakMusic();if(this.context)this.breakMusic.prepare(this.context);}
+    if(state?.phase==="active"){this.stop();this.music.set(false,"");}
+    this.breakMusic?.sync(state?.id||null,state?.phase==="active");
+    if(state&&(!this.context||this.context.state!=="running"))void this.unlock();
+  }
   // The rendered wheel can end the roll immediately, even after a delayed poll.
   land(id:string){this.wow(id);}
   private wow(id:string){
@@ -176,5 +188,5 @@ export class WheelAudio {
     try{if(ctx&&gain){gain.gain.cancelScheduledValues(ctx.currentTime);gain.gain.setValueAtTime(gain.gain.value,ctx.currentTime);gain.gain.linearRampToValueAtTime(0,ctx.currentTime+.6);source.stop(ctx.currentTime+.65);}else source.stop();}catch{try{source.stop();}catch{}}
   }
   private stop(){this.stopWinner();clearTimeout(this.timer);try{this.drum?.stop();}catch{}try{this.wowSource?.stop();}catch{}try{this.cymbal?.stop();}catch{}this.drum=null;this.wowSource=null;this.cymbal=null;this.scheduled=null;if(this.speaking&&"speechSynthesis" in window){window.speechSynthesis.cancel();this.speaking=false;}}
-  dispose(){this.disposed=true;this.stop();this.music.dispose();this.spookyWinnerMusic?.dispose();if(this.context)this.context.onstatechange=null;void this.context?.close();}
+  dispose(){this.disposed=true;this.stop();this.music.dispose();this.spookyWinnerMusic?.dispose();this.breakMusic?.dispose();if(this.context)this.context.onstatechange=null;void this.context?.close();}
 }
