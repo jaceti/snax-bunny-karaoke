@@ -1,6 +1,6 @@
 import { env } from "cloudflare:workers";
 import { readBreak,setBunnyBreak,activatePendingBreak,startNextOutsideBreak } from "../../../bunny-break-server";
-import { noRepeatOrder,previousSinger,rememberSingerStatement } from "../../../singer-rotation";
+import { noRepeatOrder,previousSinger,nextQueuedSinger,rememberSingerStatement } from "../../../singer-rotation";
 import { hostTokenMatches } from "../shared-host";
 import { readWheel,openWheel,spinWheel,closeWheel,finishInterruptedSong } from "../../../wheel-server";
 import { listPicks,pinnedIds,addPick,deletePick,movePick,snaxSingsNext } from "../../../snax-picks";
@@ -108,7 +108,20 @@ export async function PATCH(request:Request, context:{params:Promise<{code:strin
         }
         else if(action==="pick_delete"&&pickId) await deletePick(db,code,pickId);
         else if((action==="pick_up"||action==="pick_down")&&pickId) await movePick(db,code,pickId,action==="pick_up"?"up":"down");
-        else if(action==="snax_next") await snaxSingsNext(db,code,pickId);
+        else if(action==="snax_next") {
+          await snaxSingsNext(db,code,pickId);
+          // The first pick has no previous song whose ENDED event could start it.
+          // Start an idle stage, but never interrupt a singer or override a hold.
+          await readWheel(db,code); // Ensure wheel/rotation/break tables exist.
+          const next=await nextQueuedSinger(db,code);
+          if(next){
+            const idle="EXISTS(SELECT 1 FROM rooms WHERE code=? AND playback_status='idle') AND NOT EXISTS(SELECT 1 FROM room_wheel WHERE room_code=?) AND NOT EXISTS(SELECT 1 FROM room_break WHERE room_code=?)";
+            await db.batch([
+              db.prepare(`UPDATE queue_items SET status='playing',started_at=CURRENT_TIMESTAMP WHERE id=? AND room_code=? AND status='pending' AND NOT EXISTS(SELECT 1 FROM queue_items WHERE room_code=? AND status='playing') AND ${idle}`).bind(next.id,code,code,code,code,code),
+              db.prepare(`UPDATE rooms SET playback_status='playing' WHERE code=? AND ${idle} AND EXISTS(SELECT 1 FROM queue_items WHERE id=? AND room_code=? AND status='playing')`).bind(code,code,code,code,next.id,code),
+            ]);
+          }
+        }
         return respond();
       }catch(error){ return Response.json({error:error instanceof Error?error.message:"Snax’s picks missed their cue."},{status:409}); }
     }

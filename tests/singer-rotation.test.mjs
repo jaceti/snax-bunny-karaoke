@@ -44,6 +44,44 @@ async function fixture(){
   return {sql,db,patch,get,rawPatch};
 }
 
+test('Snax sings next starts the first song of a fresh night without a separate Play press',async()=>{
+  const {sql,patch}=await fixture();await patch({action:'reset_event'});
+  await patch({action:'pick_add',song:{title:'Opening number',videoId:'snaxfirst01'}});
+  const room=await patch({action:'snax_next'});
+  assert.equal(room.nowPlaying?.singerName,'Snax');assert.equal(room.nowPlaying?.videoId,'snaxfirst01');
+  assert.equal(room.playbackStatus,'playing');assert.equal(room.queue.length,0);assert.equal(room.snaxPicks.length,0);assert.deepEqual(room.pinnedIds,[]);
+  sql.close();
+});
+test('Snax opening number starts ahead of other waiting singers when nobody has sung yet',async()=>{
+  const {sql,patch}=await fixture();sql.exec("DELETE FROM queue_items WHERE status='playing';UPDATE rooms SET playback_status='idle'");
+  await patch({action:'pick_add',song:{title:'Opening number',videoId:'snaxfirst01'}});
+  const room=await patch({action:'snax_next'});assert.equal(room.nowPlaying?.singerName,'Snax');assert.equal(room.queue.length,4);sql.close();
+});
+test('Snax pick does not interrupt a current singer or override an explicit host pause',async()=>{
+  const {sql,patch}=await fixture();
+  await patch({action:'pick_add',song:{title:'Opening number',videoId:'snaxfirst01'}});
+  const queued=await patch({action:'snax_next'});assert.equal(queued.nowPlaying.id,1);assert.equal(queued.queue[0].singerName,'Snax');
+  await patch({action:'reset_event'});await patch({action:'pause'});
+  await patch({action:'pick_add',song:{title:'Opening number',videoId:'snaxfirst01'}});
+  const paused=await patch({action:'snax_next'});assert.equal(paused.nowPlaying,null);assert.equal(paused.playbackStatus,'paused');assert.equal(paused.queue[0].singerName,'Snax');
+  assert.equal((await patch({action:'play'})).nowPlaying.singerName,'Snax');sql.close();
+});
+test('Snax cannot bypass a bunny break or a wheel by sending a saved pick',async()=>{
+  const {sql,patch}=await fixture();await patch({action:'reset_event'});await patch({action:'break_set',breakEnabled:true});
+  await patch({action:'pick_add',song:{title:'Opening number',videoId:'snaxfirst01'}});
+  const held=await patch({action:'snax_next'});assert.equal(held.nowPlaying,null);assert.equal(held.bunnyBreak.phase,'active');assert.equal(held.playbackStatus,'paused');
+  await patch({action:'reset_event'});
+  sql.exec("INSERT INTO queue_items(room_code,singer_name,song_title,sort_order,status) VALUES('ROOM','Alex','Song',1,'pending')");
+  await patch({action:'wheel_open'});await patch({action:'pick_add',song:{title:'Opening number',videoId:'snaxfirst01'}});
+  const wheel=await patch({action:'snax_next'});assert.equal(wheel.nowPlaying,null);assert.ok(wheel.wheel);assert.equal(wheel.playbackStatus,'paused');sql.close();
+});
+test('idle Snax start still respects no consecutive turns when another singer is waiting',async()=>{
+  const {sql,db,patch}=await fixture();await rotation.ensureRotationSchema(db);
+  sql.exec("DELETE FROM queue_items WHERE status='playing';UPDATE rooms SET playback_status='idle';INSERT INTO room_rotation VALUES('ROOM','snax')");
+  await patch({action:'pick_add',song:{title:'Next number',videoId:'snaxfirst01'}});
+  const room=await patch({action:'snax_next'});assert.equal(room.nowPlaying?.singerName,' JESS ');assert.equal(room.queue[0].singerName,'Snax');sql.close();
+});
+
 test('bunny break finishes current song, preserves lineup, holds across reload, then resumes without a repeated singer',async()=>{
   const {sql,patch,get}=await fixture();
   const before=await get();
