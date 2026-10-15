@@ -36,7 +36,11 @@ export function WheelView({wheel,serverNow,onLand}:{wheel:WheelState;serverNow:n
         <circle cx="240" cy="240" r="220" fill="none" stroke="#111" strokeWidth="4"/>
         <g className="wheel-notches" aria-hidden="true" stroke="#111" strokeWidth="3" strokeLinecap="round">{Array.from({length:48},(_,index)=>{const inner=point(index*7.5,221),outer=point(index*7.5,228);return <line key={index} x1={inner[0]} y1={inner[1]} x2={outer[0]} y2={outer[1]}/>;})}</g>
         <defs><clipPath id={portraitClip}><circle cx="240" cy="240" r="55"/></clipPath></defs>
-        <g transform={`rotate(${-angle} 240 240)`}>{spooky&&<circle cx="240" cy="240" r="55" fill="#272725"/>}{gobble?<svg x="185" y="185" width="110" height="110" viewBox="0 0 100 100"><circle cx="50" cy="50" r="50" fill="#f2e8bd"/><FallIcon kind="turkey"/></svg>:<image href={spooky?"/snax-spooky-bunny.png":"/snax-profile-hd.png"} x="185" y="185" width="110" height="110" preserveAspectRatio={spooky?"xMidYMid meet":"xMidYMid slice"} clipPath={`url(#${portraitClip})`}><title>Snax the Bunny</title></image>}<circle cx="240" cy="240" r="55" fill="none" stroke="#111" strokeWidth="5"/></g>
+        <g transform={`rotate(${-angle} 240 240)`}>
+          {(spooky||gobble)&&<circle cx="240" cy="240" r="55" fill={gobble?"#f2e8bd":"#272725"}/>}
+          <image href={gobble?"/snax-gobble-portrait.webp":spooky?"/snax-spooky-bunny.png":"/snax-profile-hd.png"} x="185" y="185" width="110" height="110" preserveAspectRatio={spooky?"xMidYMid meet":"xMidYMid slice"} clipPath={`url(#${portraitClip})`}><title>Snax the Bunny</title></image>
+          <circle cx="240" cy="240" r="55" fill="none" stroke="#111" strokeWidth="5"/>
+        </g>
       </svg>
     </div>
     <div className="wheel-copy" aria-live="polite"><p className="eyebrow">{gobble?"Snax’s harvest karaoke":spooky?"Snax’s haunted karaoke":"Snax picks the next star"}</p><h2>{gobble?(won?"FEAST ON THE MIC!":wheel.phase==="ready"?"GOBBLE WHEEL":"GOBBLE, GOBBLE…"):spooky?(won?"RISE & SING!":wheel.phase==="ready"?"SPOOKY WHEEL":"FATE IS SPINNING…"):(won?"TAKE THE MIC!":wheel.phase==="ready"?"WHO’S NEXT?":"ROUND WE GO…")}</h2>
