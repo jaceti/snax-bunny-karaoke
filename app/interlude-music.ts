@@ -23,8 +23,8 @@ export class TrackBag {
 // One current clip + one prefetched clip, never the whole library. Async loads
 // cannot start music after the name card has gone away or the host has paused.
 export class InterludeMusic {
-  private bag=new TrackBag();
-  private nextTrack=this.bag.next();
+  private bag:TrackBag;
+  private nextTrack:string;
   private track:string|null=null;
   private key:string|null=null;
   private wanted=false;
@@ -34,6 +34,7 @@ export class InterludeMusic {
   private buffers=new Map<string,Promise<AudioBuffer|null>>();
   private loading=false;
   private context:AudioContext|null=null;
+  constructor(tracks:readonly string[]=INTERLUDE_TRACKS){this.bag=new TrackBag(tracks);this.nextTrack=this.bag.next();}
   prepare(ctx:AudioContext){this.context=ctx;void this.load(this.nextTrack);}
   private load(track:string){
     let pending=this.buffers.get(track);

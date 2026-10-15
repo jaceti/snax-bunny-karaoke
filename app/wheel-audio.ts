@@ -2,6 +2,7 @@ import { BunnyBreakMusic } from "./bunny-break-music.ts";
 import type { BunnyBreak } from "./bunny-break-server";
 import type { WheelState } from "./wheel-model";
 import { InterludeMusic } from "./interlude-music.ts";
+import { GOBBLE_SPIN,GOBBLE_TRACKS } from "./gobble-music.ts";
 
 // A steady traditional snare roll, with wire rattle and drum-head resonance.
 export function drumrollHitTimes(duration=7){
@@ -57,6 +58,9 @@ export class WheelAudio {
   private music=new InterludeMusic();
   private breakMusic:BunnyBreakMusic|null=null;
   private spookyWinnerMusic:InterludeMusic|null=null;
+  private gobbleWinnerMusic:InterludeMusic|null=null;
+  private gobbleBuffer:AudioBuffer|null=null;
+  private loadingGobble:Promise<void>|null=null;
   // Snax's "Bumbersnax" track plays from the moment the wheel reveals a winner
   // until the host closes the wheel.
   private winnerBuffer:AudioBuffer|null=null;
@@ -69,12 +73,13 @@ export class WheelAudio {
     try{
       if(!this.context){
         this.context=new AudioContext();
-        this.context.onstatechange=()=>{if(!this.disposed){this.enabled(this.context?.state==="running");this.schedule();this.music.resume();this.spookyWinnerMusic?.resume();this.breakMusic?.resume();}};
+        this.context.onstatechange=()=>{if(!this.disposed){this.enabled(this.context?.state==="running");this.schedule();this.music.resume();this.spookyWinnerMusic?.resume();this.gobbleWinnerMusic?.resume();this.breakMusic?.resume();}};
         this.music.prepare(this.context);
       }
       // Preload even while browser permission is pending, not after the first spin.
       void this.preloadWow();
       if(this.spookyWinnerMusic)this.spookyWinnerMusic.prepare(this.context);
+      if(this.gobbleWinnerMusic){this.gobbleWinnerMusic.prepare(this.context);void this.preloadGobble();}
       if(this.breakMusic)this.breakMusic.prepare(this.context);
       await this.context.resume();
       if(this.disposed)return;
@@ -82,6 +87,7 @@ export class WheelAudio {
       this.schedule();
       this.music.resume();
       this.spookyWinnerMusic?.resume();
+      this.gobbleWinnerMusic?.resume();
       this.breakMusic?.resume();
     }catch{this.enabled(false);}
   }
@@ -100,6 +106,13 @@ export class WheelAudio {
     })();
     return this.loadingWow;
   }
+  private preloadGobble(){
+    if(!this.context||this.gobbleBuffer)return Promise.resolve();
+    if(!this.loadingGobble)this.loadingGobble=(async()=>{
+      try{const response=await fetch(GOBBLE_SPIN);if(!response.ok||this.disposed)return;const bytes=await response.arrayBuffer();if(!this.disposed&&this.context)this.gobbleBuffer=await this.context.decodeAudioData(bytes);}catch{}
+    })().finally(()=>{this.loadingGobble=null;if(this.gobbleBuffer&&!this.disposed)this.schedule();});
+    return this.loadingGobble;
+  }
   sync(wheel:WheelState|null,serverNow:number){
     if(this.disposed)return;
     // Anchor once per spin. Poll/network jitter must not move the finish line.
@@ -110,6 +123,10 @@ export class WheelAudio {
     if(wheel.theme==="spooky"){
       this.spookyWinnerMusic??=new InterludeMusic();
       if(this.context)this.spookyWinnerMusic.prepare(this.context);
+    }
+    if(wheel.theme==="gobble"){
+      this.gobbleWinnerMusic??=new InterludeMusic(GOBBLE_TRACKS);
+      if(this.context){this.gobbleWinnerMusic.prepare(this.context);void this.preloadGobble();}
     }
     // Retry automatically on wheel updates; a TV already allowed to play media
     // should never need a separate wheel-specific activation.
@@ -124,6 +141,20 @@ export class WheelAudio {
     // Opening/reloading an already-finished result must never replay the sound.
     if(remaining<=0||wheel.phase!=="spinning")return;
     this.scheduled=wheel.id;
+    if(wheel.theme==="gobble"){
+      // Keep the reveal on time even if the gobble download is slow. A late
+      // download can join a spin, but can never play over an already-landed name.
+      this.timer=setTimeout(()=>this.wow(wheel.id),remaining);
+      void this.preloadGobble().then(()=>{
+        if(this.disposed||this.scheduled!==wheel.id||this.heard.has(wheel.id)||!this.gobbleBuffer||ctx.state!=="running")return;
+        const elapsed=Date.now()-this.offset-wheel.startedAt!,left=wheel.endsAt!-(Date.now()-this.offset);
+        if(left<=0)return;
+        const source=ctx.createBufferSource(),gain=ctx.createGain();source.buffer=this.gobbleBuffer;gain.gain.value=.8;source.connect(gain);gain.connect(ctx.destination);
+        source.onended=()=>{source.disconnect();gain.disconnect();};
+        source.start(0,Math.max(0,elapsed/1000));source.stop(ctx.currentTime+left/1000);this.drum=source;
+      });
+      return;
+    }
     let buffer=this.drumBuffer;
     if(!buffer){const samples=drumrollSamples();buffer=ctx.createBuffer(1,samples.length,22050);buffer.copyToChannel(samples,0);}
     const source=ctx.createBufferSource();source.buffer=buffer;
@@ -145,6 +176,10 @@ export class WheelAudio {
     if(this.disposed||this.wheel?.id!==id||this.heard.has(id)||this.scheduled!==id)return;
     this.heard.add(id);clearTimeout(this.timer);try{this.drum?.stop();}catch{}this.drum=null;
     const ctx=this.context;
+    if(ctx&&this.wheel.theme==="gobble"){
+      this.gobbleWinnerMusic??=new InterludeMusic(GOBBLE_TRACKS);this.gobbleWinnerMusic.prepare(ctx);this.gobbleWinnerMusic.set(true,`winner-${id}`);
+      return; // Gobble ends; a random fall track starts directly on the reveal.
+    }
     if(ctx&&this.wheel.theme==="spooky"){
       this.spookyWinnerMusic??=new InterludeMusic();this.spookyWinnerMusic.prepare(ctx);this.spookyWinnerMusic.set(true,`winner-${id}`);
     }else if(ctx&&this.winnerBuffer&&!this.winnerSource){
@@ -183,10 +218,11 @@ export class WheelAudio {
   }
   private stopWinner(){
     this.spookyWinnerMusic?.set(false,"");
+    this.gobbleWinnerMusic?.set(false,"");
     const source=this.winnerSource,gain=this.winnerGain,ctx=this.context;this.winnerSource=null;this.winnerGain=null;
     if(!source)return;
     try{if(ctx&&gain){gain.gain.cancelScheduledValues(ctx.currentTime);gain.gain.setValueAtTime(gain.gain.value,ctx.currentTime);gain.gain.linearRampToValueAtTime(0,ctx.currentTime+.6);source.stop(ctx.currentTime+.65);}else source.stop();}catch{try{source.stop();}catch{}}
   }
   private stop(){this.stopWinner();clearTimeout(this.timer);try{this.drum?.stop();}catch{}try{this.wowSource?.stop();}catch{}try{this.cymbal?.stop();}catch{}this.drum=null;this.wowSource=null;this.cymbal=null;this.scheduled=null;if(this.speaking&&"speechSynthesis" in window){window.speechSynthesis.cancel();this.speaking=false;}}
-  dispose(){this.disposed=true;this.stop();this.music.dispose();this.spookyWinnerMusic?.dispose();this.breakMusic?.dispose();if(this.context)this.context.onstatechange=null;void this.context?.close();}
+  dispose(){this.disposed=true;this.stop();this.music.dispose();this.spookyWinnerMusic?.dispose();this.gobbleWinnerMusic?.dispose();this.breakMusic?.dispose();if(this.context)this.context.onstatechange=null;void this.context?.close();}
 }

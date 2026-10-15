@@ -1,0 +1,20 @@
+[
+  {
+    "file": "thanksgiving-reprise.mp3",
+    "source": "Thanksgiving Theme (Reprise).mp3",
+    "startSeconds": 8,
+    "durationSeconds": 45
+  },
+  {
+    "file": "pumpkin-waltz.mp3",
+    "source": "The Great Pumpkin Waltz.mp3",
+    "startSeconds": 8,
+    "durationSeconds": 45
+  },
+  {
+    "file": "great-pumpkin.mp3",
+    "source": "It's The Great Pumpkin Charlie Brown   Full Soundtrack..mp3",
+    "startSeconds": 8,
+    "durationSeconds": 45
+  }
+]

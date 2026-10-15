@@ -44,6 +44,14 @@ async function fixture(){
   return {sql,db,patch,get,rawPatch};
 }
 
+test('host route accepts Gobble Wheel, preserves its theme through spin, and rejects unknown themes',async()=>{
+  const {sql,patch,rawPatch}=await fixture();
+  assert.equal((await rawPatch({action:'wheel_open',wheelTheme:'unknown'})).status,400);
+  const opened=await patch({action:'wheel_open',wheelTheme:'gobble'});assert.equal(opened.wheel.theme,'gobble');assert.equal(opened.playbackStatus,'paused');
+  const spun=await patch({action:'wheel_spin',wheelId:opened.wheel.id});assert.equal(spun.wheel.theme,'gobble');assert.equal(spun.wheel.phase,'spinning');
+  assert.ok(!spun.wheel.entries[spun.wheel.winnerIndex].filler);sql.close();
+});
+
 test('Snax sings next starts the first song of a fresh night without a separate Play press',async()=>{
   const {sql,patch}=await fixture();await patch({action:'reset_event'});
   await patch({action:'pick_add',song:{title:'Opening number',videoId:'snaxfirst01'}});
@@ -117,7 +125,7 @@ test('idle break starts immediately, accepts new waiting songs, and never starts
 test('bunny break and both wheels are mutually exclusive; active break only exits with break control',async()=>{
   const {sql,patch,rawPatch}=await fixture();
   await patch({action:'break_set',breakEnabled:true});
-  for(const wheelTheme of ['classic','spooky'])assert.equal((await rawPatch({action:'wheel_open',wheelTheme})).status,409);
+  for(const wheelTheme of ['classic','spooky','gobble'])assert.equal((await rawPatch({action:'wheel_open',wheelTheme})).status,409);
   await patch({action:'skip',itemId:1});
   for(const action of ['play','pause','skip'])assert.equal((await rawPatch({action})).status,409);
   await patch({action:'break_set',breakEnabled:false});
@@ -143,7 +151,7 @@ test('wheel remains uniformly random among all eligible distinct singers, regard
   const counts={};for(let draw=0;draw<300;draw++){const name=roster[pickWheelWinner(roster,()=>draw)].name;counts[name]=(counts[name]||0)+1;}
   assert.deepEqual(counts,{Alex:100,Sam:100,Pat:100});assert.ok(!roster.some(e=>e.name==='Jess'));
 });
-for(const theme of ['classic','spooky'])test(`${theme} excludes current/just-finished singer at opening and rechecks on spin`,async()=>{
+for(const theme of ['classic','spooky','gobble'])test(`${theme} excludes current/just-finished singer at opening and rechecks on spin`,async()=>{
   const {db,sql}=await fixture();await wheels.openWheel(db,'ROOM',theme);const ready=await wheels.readWheel(db,'ROOM');
   assert.deepEqual(ready.entries.filter(e=>!e.filler).map(e=>e.name),['Alex','Sam']);
   await wheels.finishInterruptedSong(db,'ROOM',1);

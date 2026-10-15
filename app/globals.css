@@ -51,6 +51,26 @@ summary { display: list-item; }
 /* The original wheel stays pink/blue. Halloween is a separate shared wheel mode. */
 @font-face{font-family:SnaxHorror;src:url("/spooky-display.ttf") format("truetype");font-style:normal;font-weight:400;font-display:swap}
 .wheel-choices{display:flex;flex-wrap:wrap;gap:14px}
+.gobble-wheel-button{background:#d9a455!important;color:#40291e!important;border-color:#40291e!important}
+.wheel-gobble,.wheel-gobble.wheel-won{background:#f2e8bd;color:#f2e8bd;padding:38px}
+.wheel-gobble:before{content:"";position:absolute;inset:12px;background:#513524;clip-path:polygon(1% 2%,9% 0,19% 1.8%,35% .4%,48% 2%,64% 0,79% 1.7%,98% 1%,100% 24%,98.7% 48%,100% 70%,98% 98%,83% 99%,68% 97.5%,51% 100%,32% 98%,15% 99.5%,1% 98%,0 75%,1.3% 51%,0 26%)}
+.wheel-gobble .wheel-copy h2{font-family:SnaxHorror,Impact,sans-serif;font-weight:400;font-size:clamp(38px,5.5vw,86px);letter-spacing:.02em;color:#e5ad60}
+.wheel-gobble .wheel-copy>.eyebrow{font-size:13px;letter-spacing:.14em;color:#f2e8bd}
+.wheel-gobble .wheel-copy>p:not(.eyebrow){font-size:clamp(16px,1.6vw,24px);max-width:350px}
+.wheel-gobble .wheel-pointer{color:#b94d34;-webkit-text-stroke:2px #f2e8bd;top:-6px}
+.wheel-gobble .wheel-winner{background:#f2e8bd;color:#40291e;border-color:#d9a455;box-shadow:7px 7px 0 #a64b31}
+.wheel-gobble .wheel-winner p{font-size:clamp(15px,1.4vw,22px)}
+.wheel-gobble .wheel-filler-note{color:#e5cfa1}
+.fall-garland{display:flex;gap:10px;justify-content:center;margin-top:20px}
+.fall-garland svg{width:clamp(36px,4.6vw,70px);height:auto;transform:rotate(-9deg)}
+.fall-garland svg:nth-child(even){transform:rotate(11deg) translateY(-5px)}
+.fall-corners{position:absolute;inset:22px;pointer-events:none;opacity:.35}
+.fall-corners>svg{position:absolute;width:85px;right:0;top:0;transform:rotate(18deg)}
+.fall-corners>svg+svg{left:0;top:auto;bottom:0;transform:rotate(-15deg)}
+.wheel-gobble .wheel-confetti i.confetti-fall{background:transparent!important;border-radius:0;width:var(--size);height:var(--size);filter:drop-shadow(1px 2px 0 #40291e)}
+.confetti-fall svg{width:100%;height:100%;display:block}
+@media(max-width:750px){.wheel-gobble{padding:26px}.wheel-gobble .wheel-copy h2{font-size:34px}.fall-garland{gap:4px;margin-top:12px}.wheel-gobble .wheel-copy>.eyebrow{font-size:10px}.fall-corners{opacity:.18}}
+@media(max-height:650px){.fall-garland{display:none}.wheel-gobble .wheel-copy h2{margin-bottom:12px}}
 .wheel-open-button.spooky-wheel-button{background:#292927;color:#e4e2d5;gap:20px}
 .wheel-spooky,.wheel-spooky.wheel-won{background:#d9d9cc;color:#e4e2d5;padding:38px}
 .wheel-spooky:before{content:"";position:absolute;inset:12px;background:#292927;clip-path:polygon(1% 2%,9% 0,19% 1.8%,35% .4%,48% 2%,64% 0,79% 1.7%,98% 1%,100% 24%,98.7% 48%,100% 70%,98% 98%,83% 99%,68% 97.5%,51% 100%,32% 98%,15% 99.5%,1% 98%,0 75%,1.3% 51%,0 26%)}
